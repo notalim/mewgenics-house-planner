@@ -260,7 +260,7 @@ export default function Planner() {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className="border-b border-border lg:h-full lg:w-[360px] lg:shrink-0 lg:border-b-0 lg:border-r max-lg:max-h-[70vh]">
+        <aside className="border-b border-border lg:h-full lg:w-[360px] lg:shrink-0 lg:border-b-0 lg:border-r max-lg:h-[65vh] overflow-hidden">
           {ready ? (
             <InventoryPanel
               owned={owned}

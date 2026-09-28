@@ -513,9 +513,9 @@ function toResult(
       const g = goals[i];
       const st = { ...sol.rooms[i].stats };
       const m = rare === "1" ? 2 : 1;
-      const before = roomScore(st, g) + input.appealWeight * st.a;
+      const before = roomScore(st, g, FILL_PENALTY) + input.appealWeight * st.a;
       for (const s of STAT_ORDER) st[s] += sh.base[s] * m;
-      if (roomScore(st, g) + input.appealWeight * st.a > before + 1e-9) useful = true;
+      if (roomScore(st, g, FILL_PENALTY) + input.appealWeight * st.a > before + 1e-9) useful = true;
     }
     leftovers.push({ itemId, rare: rare === "1", count: units.length, reason: useful ? "no-space" : "not-useful" });
   });

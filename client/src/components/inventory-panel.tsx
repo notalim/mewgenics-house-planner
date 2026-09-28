@@ -249,9 +249,9 @@ export function InventoryPanel({
                         {pl?.n ? `${pl.n}/${total} placed` : "not placed"}
                       </span>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                       <Stepper
-                        label="Normal"
+                        label="Qty"
                         value={count}
                         onChange={(v) => onSet(f.id, v, rare)}
                         testid={`stepper-count-${f.id}`}
@@ -353,7 +353,7 @@ function Stepper({
   testid: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5" data-testid={testid}>
+    <div className="flex items-center gap-1" data-testid={testid}>
       <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
         {icon && <Sparkles className="h-3 w-3" style={{ color: "hsl(var(--rare))" }} />}
         {label}

@@ -277,9 +277,10 @@ function RoomGrid({
         if (v === "0") cells.push(<rect key={`f${x}-${y}`} x={px} y={py} width={C} height={C} fill="hsl(var(--room-free))" stroke="hsl(var(--room-grid))" strokeWidth={0.6} />);
         else {
           cells.push(<rect key={`b${x}-${y}`} x={px} y={py} width={C} height={C} fill="hsl(var(--room-block))" />);
-          if (v === "2") {
+          const isFloor = y + 1 < H && def.grid[y + 1][x] === "0";
+          const isCeil = y > 0 && def.grid[y - 1][x] === "0";
+          if (v === "2" && (isFloor || isCeil)) {
             // surface edge: floor line on top of a floor cell, ceiling line under a ceiling cell
-            const isFloor = y + 1 < H && def.grid[y + 1][x] === "0";
             cells.push(
               <rect
                 key={`s${x}-${y}`}
@@ -310,8 +311,7 @@ function RoomGrid({
         setTip(null);
       }}
       onMouseMove={(e) => {
-        const r = wrap.current?.getBoundingClientRect();
-        if (r) setTip({ x: e.clientX - r.left, y: e.clientY - r.top });
+        setTip({ x: e.clientX, y: e.clientY });
       }}
     >
       <svg viewBox={`0 0 ${W * C} ${(H + 1) * C}`} className="block w-full" role="img" aria-label={`Layout for ${def.label}`}>
@@ -350,7 +350,7 @@ function RoomGrid({
                   width={C}
                   height={C}
                   fill={color}
-                  opacity={t === 2 ? 0.55 : 0.88}
+                  opacity={t === 2 ? 0.72 : 0.92}
                 />
               ))}
               {body
@@ -401,19 +401,20 @@ function RoomGrid({
         ))}
       </svg>
 
-      {hovered && tip && <Tooltip p={hovered} placements={items} x={tip.x} y={tip.y} wrapW={wrap.current?.clientWidth ?? 600} />}
+      {hovered && tip && <Tooltip p={hovered} placements={items} x={tip.x} y={tip.y} />}
     </div>
   );
 }
 
-function Tooltip({ p, placements, x, y, wrapW }: { p: Placement; placements: Placement[]; x: number; y: number; wrapW: number }) {
+function Tooltip({ p, placements, x, y }: { p: Placement; placements: Placement[]; x: number; y: number }) {
   const f = FURNITURE_BY_ID[p.itemId];
   const { col, row, rests } = placementLabel(p, placements);
-  const left = Math.min(Math.max(8, x + 14), wrapW - 248);
+  const left = Math.min(Math.max(8, x + 14), window.innerWidth - 256);
+  const top = y + 170 > window.innerHeight ? y - 160 : y + 16;
   return (
     <div
-      className="pointer-events-none absolute z-20 w-60 rounded-md border border-popover-border bg-popover p-3 text-popover-foreground shadow-lg"
-      style={{ left, top: y + 14 }}
+      className="pointer-events-none fixed z-50 w-60 rounded-md border border-popover-border bg-popover p-3 text-popover-foreground shadow-lg"
+      style={{ left, top }}
       data-testid="tooltip-placement"
     >
       <div className="flex items-center gap-1.5">
