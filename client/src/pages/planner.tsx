@@ -68,6 +68,7 @@ export default function Planner() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [seed, setSeed] = useState(1337);
   const warmRef = useRef<WarmStart | null>(null);
+  const [mobileTab, setMobileTab] = useState<"furniture" | "rooms">("rooms");
   const [auto, setAuto] = useState<{ running: boolean; info: AutoInfo | null }>({ running: false, info: null });
   const [dark, setDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
 
@@ -195,17 +196,17 @@ export default function Planner() {
     );
 
   return (
-    <div className="flex min-h-screen flex-col lg:h-screen">
+    <div className="flex h-[100dvh] flex-col">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-2.5">
           <Logo className="h-7 w-7 text-primary" />
           <div className="leading-tight">
             <h1 className="font-display text-base font-semibold tracking-tight">Mewgenics House Planner</h1>
-            <p className="text-[11px] text-muted-foreground">Fits the furniture you own into your rooms, tile by tile</p>
+            <p className="text-[11px] text-muted-foreground max-sm:hidden">Fits the furniture you own into your rooms, tile by tile</p>
           </div>
         </div>
 
-        <div className="flex flex-1 flex-wrap items-center gap-2 lg:justify-end">
+        <div className="flex flex-1 flex-wrap items-center gap-2 lg:justify-end max-lg:basis-full max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:pb-1 [&>*]:shrink-0">
           <Select
             value={house.stage}
             onValueChange={(stage) => {
@@ -226,7 +227,7 @@ export default function Planner() {
             </SelectContent>
           </Select>
 
-          <div className="flex flex-wrap gap-1" role="group" aria-label="Unlocked rooms">
+          <div className="flex flex-wrap gap-1 max-lg:flex-nowrap" role="group" aria-label="Unlocked rooms">
             {houseDef.rooms.map((r) => {
               const on = house.enabled.includes(r);
               return (
@@ -299,8 +300,31 @@ export default function Planner() {
         </div>
       </header>
 
+      <div className="flex border-b border-border lg:hidden" role="tablist">
+        {(["rooms", "furniture"] as const).map((t) => (
+          <button
+            key={t}
+            role="tab"
+            aria-selected={mobileTab === t}
+            onClick={() => setMobileTab(t)}
+            className={cn(
+              "flex-1 py-2 text-xs font-medium transition-colors",
+              mobileTab === t ? "border-b-2 border-primary text-foreground" : "text-muted-foreground",
+            )}
+            data-testid={`tab-${t}`}
+          >
+            {t === "rooms" ? "Rooms" : `Your furniture (${ownedList.reduce((a, o) => a + o.count + o.rare, 0)})`}
+          </button>
+        ))}
+      </div>
+
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className="border-b border-border lg:h-full lg:w-[360px] lg:shrink-0 lg:border-b-0 lg:border-r max-lg:h-[65vh] overflow-hidden">
+        <aside
+          className={cn(
+            "min-h-0 flex-1 overflow-hidden lg:h-full lg:w-[360px] lg:flex-none lg:shrink-0 lg:border-r lg:border-border",
+            mobileTab !== "furniture" && "max-lg:hidden",
+          )}
+        >
           {ready ? (
             <InventoryPanel
               owned={owned}
@@ -321,7 +345,7 @@ export default function Planner() {
           )}
         </aside>
 
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main className={cn("min-h-0 flex-1 overflow-y-auto", mobileTab !== "rooms" && "max-lg:hidden")}>
           <div className="mx-auto max-w-[1180px] space-y-4 p-4">
             <SummaryBar
               running={running}
@@ -338,7 +362,7 @@ export default function Planner() {
               <Card className="p-5 text-sm">
                 <p className="font-medium">Start with the furniture you own</p>
                 <p className="mt-1 text-muted-foreground">
-                  Use Add furniture on the left. Every piece you add is saved and the layout below recomputes. Rooms start
+                  Use Add furniture (left side on desktop, Your furniture tab on phone). Every piece you add is saved and the layout below recomputes. Rooms start
                   as elite breeding, holding and a feeder nursery. Once your furniture is in, press Pick strategy for me
                   to test every way of splitting those roles across your rooms.
                 </p>
