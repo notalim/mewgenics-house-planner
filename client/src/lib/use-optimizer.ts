@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { optimize, type OptimizeInput, type OptimizeResult } from "./optimizer";
 import { FURNITURE_BY_ID, ROOMS } from "./data";
+import { autoStrategy, type AutoResult } from "./auto";
 
 type Req = Omit<OptimizeInput, "items" | "rooms">;
 
@@ -75,4 +76,39 @@ export function useOptimizer(req: Req | null, deps: unknown[]) {
   }, deps);
 
   return { result, running, error };
+}
+
+/** One-off auto strategy search in its own worker (falls back to the main thread). */
+export function runAutoStrategy(
+  input: { owned: OptimizeInput["owned"]; appealWeight: number },
+  roomIds: string[],
+  catsByRole: Record<string, number>,
+): Promise<AutoResult> {
+  const main = () => autoStrategy({ ...input, items: FURNITURE_BY_ID, rooms: ROOMS }, roomIds, catsByRole);
+  return new Promise((resolve, reject) => {
+    let w: Worker | null = null;
+    let done = false;
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true;
+      w?.terminate();
+      fn();
+    };
+    const fallback = () => finish(() => {
+      try {
+        resolve(main());
+      } catch (e) {
+        reject(e);
+      }
+    });
+    try {
+      w = new Worker(new URL("./optimizer.worker.ts", import.meta.url), { type: "module" });
+      w.onmessage = (e) => finish(() => (e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.res)));
+      w.onerror = fallback;
+      w.postMessage({ id: 1, kind: "auto", input, roomIds, catsByRole });
+      setTimeout(fallback, 12000);
+    } catch {
+      fallback();
+    }
+  });
 }

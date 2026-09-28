@@ -77,7 +77,7 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
     <div className="grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-[minmax(0,1.6fr)_repeat(3,minmax(0,1fr))]">
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">Room goal</Label>
-        <Select value={goal.preset} onValueChange={(v) => onGoal(goalFromPreset(roomId, v, goal.cats))}>
+        <Select value={goal.preset} onValueChange={(v) => onGoal(goalFromPreset(roomId, v))}>
           <SelectTrigger className="h-9" data-testid={`select-preset-${roomId}`}>
             <SelectValue />
           </SelectTrigger>
@@ -90,7 +90,14 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
             {goal.preset === "custom" && <SelectItem value="custom">Custom weights</SelectItem>}
           </SelectContent>
         </Select>
-        <p className="text-[11px] leading-snug text-muted-foreground">{preset?.hint ?? "Custom weights"}</p>
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {preset?.hint ?? "Custom weights"}
+          {goal.mins && Object.keys(goal.mins).length > 0 && (
+            <span className="block text-foreground/70">
+              Floors: {Object.entries(goal.mins).map(([k, v]) => `${STAT_LABEL[k as StatKey]} ≥ ${v}`).join(", ")}
+            </span>
+          )}
+        </p>
       </div>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">
@@ -183,8 +190,29 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
               </label>
             ))}
           </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(["h", "m", "s"] as StatKey[]).map((k) => (
+              <label key={k} className="flex items-center gap-2 text-xs">
+                <span className="w-20 text-muted-foreground">Min {STAT_LABEL[k]}</span>
+                <Input
+                  type="number"
+                  className="h-8 font-mono"
+                  placeholder="None"
+                  value={goal.mins?.[k] ?? ""}
+                  onChange={(e) => {
+                    const mins = { ...(goal.mins ?? {}) };
+                    if (e.target.value === "") delete mins[k];
+                    else mins[k] = Number(e.target.value);
+                    onGoal({ ...goal, mins });
+                  }}
+                  data-testid={`input-min-${roomId}-${k}`}
+                />
+              </label>
+            ))}
+          </div>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Score = sum of weight × stat. Appeal is house-wide and set in the top bar.
+            Score = sum of weight × stat, minus a penalty for every point a floor is missed. Health 10+ cures disorders;
+            Mutation above 10 rolls full mutations. Appeal is house-wide and set in the top bar.
           </p>
         </CollapsibleContent>
       </Collapsible>
@@ -205,6 +233,7 @@ function StatStrip({ result, goal, primary }: { result: RoomResult | undefined; 
               <span style={isPrimary ? { color: `hsl(var(--stat-${k}))` } : undefined}>
                 {STAT_LABEL[k]}
                 {k === "a" ? " (house)" : ""}
+                {k === "c" && goal.cats > 4 ? ` (after ${goal.cats} cats)` : ""}
               </span>
             </div>
             <div className="flex items-baseline gap-1">

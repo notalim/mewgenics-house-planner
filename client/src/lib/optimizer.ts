@@ -11,6 +11,8 @@ export interface RoomGoal {
   target: { stat: StatKey; value: number } | null;
   minComfort: number | null;
   maxComfort: number | null;
+  /** floors for other stats, e.g. Health 10 (cures disorders) or Mutation 10 (full mutations) */
+  mins?: Partial<Record<StatKey, number>>;
   cats: number;
 }
 
@@ -235,6 +237,11 @@ function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENA
     const w = g.weights[k] ?? 0;
     if (!w) continue;
     let v = k === "c" ? comfort : stats[k];
+    // Comfort past a small buffer above the floor barely matters unless Comfort is the room's point
+    if (k === "c" && g.preset !== "comfort") {
+      const cap = (g.minComfort ?? 0) + 4;
+      if (v > cap) v = cap + 0.15 * (v - cap);
+    }
     if (g.target && g.target.stat === k) {
       const T = g.target.value;
       v = Math.min(v, T) + 0.08 * Math.max(0, v - T);
@@ -243,6 +250,12 @@ function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENA
   }
   if (g.minComfort !== null && comfort < g.minComfort) sc -= P * (g.minComfort - comfort);
   if (g.maxComfort !== null && comfort > g.maxComfort) sc -= P * (comfort - g.maxComfort);
+  if (g.mins)
+    for (const k of STAT_ORDER) {
+      const m = g.mins[k];
+      if (m === undefined || m === null || k === "c" || k === "a") continue;
+      if (stats[k] < m) sc -= P * 0.6 * (m - stats[k]);
+    }
   return sc;
 }
 
@@ -452,6 +465,8 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   return toResult(best, goals, shapes, input, bestScore, iterations, Date.now() - t0);
 }
 
+const STAT_NAME: Record<StatKey, string> = { c: "Comfort", s: "Stimulation", h: "Health", m: "Mutation", a: "Appeal" };
+
 function toResult(
   sol: Solution,
   goals: RoomGoal[],
@@ -476,6 +491,15 @@ function toResult(
       goalMet = false;
       notes.push(`Comfort ${stats.c} is above ${g.maxComfort}`);
     }
+    if (g.mins)
+      for (const k of STAT_ORDER) {
+        const m = g.mins[k];
+        if (m === undefined || m === null || k === "c" || k === "a") continue;
+        if (stats[k] < m) {
+          goalMet = false;
+          notes.push(`${STAT_NAME[k]} ${stats[k]} is below ${m}`);
+        }
+      }
     if (g.target && stats[g.target.stat] < g.target.value) {
       goalMet = false;
       notes.push(`Short of target by ${g.target.value - stats[g.target.stat]}`);

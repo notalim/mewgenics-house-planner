@@ -4,8 +4,8 @@ import { apiRequest, API_BASE } from "@/lib/queryClient";
 import { FURNITURE_BY_ID, HOUSES, ROOMS, statsOf } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
-import { useOptimizer } from "@/lib/use-optimizer";
-import { DEFAULT_ROOM_PRESET, goalFromPreset } from "@/lib/presets";
+import { runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
+import { DEFAULT_ROOM_PRESET, PRESET_BY_ID, goalFromPreset } from "@/lib/presets";
 import { InventoryPanel, type Owned } from "@/components/inventory-panel";
 import { RoomCard } from "@/components/room-card";
 import { Glyph, Logo, StatChips } from "@/components/bits";
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, Dices, Loader2, Moon, Sun } from "lucide-react";
+import { ChevronDown, Dices, Loader2, Moon, Sun, Wand2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface HouseSetting {
@@ -68,6 +68,7 @@ export default function Planner() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [seed, setSeed] = useState(1337);
   const warmRef = useRef<WarmStart | null>(null);
+  const [auto, setAuto] = useState<{ running: boolean; info: AutoInfo | null }>({ running: false, info: null });
   const [dark, setDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
 
   useEffect(() => {
@@ -98,6 +99,34 @@ export default function Planner() {
     (roomId: string): RoomGoal => goals[roomId] ?? goalFromPreset(roomId, DEFAULT_ROOM_PRESET[roomId] ?? "comfort"),
     [goals],
   );
+
+  const pickStrategy = async () => {
+    setAuto({ running: true, info: null });
+    const catsByRole: Record<string, number> = {};
+    for (const r of activeRooms) {
+      const g = goalFor(r);
+      if (catsByRole[g.preset] === undefined) catsByRole[g.preset] = g.cats;
+    }
+    try {
+      const res = await runAutoStrategy({ owned: ownedList, appealWeight: prefs.appealWeight }, activeRooms, catsByRole);
+      warmRef.current = null;
+      setGoals((prev) => {
+        const next = { ...prev };
+        for (const g of res.best) next[g.roomId] = g;
+        return next;
+      });
+      setAuto({
+        running: false,
+        info: {
+          assign: res.best.map((g) => ({ roomId: g.roomId, role: g.preset, cats: g.cats })),
+          tried: res.candidates.length,
+          margin: res.candidates.length > 1 ? res.candidates[0].score - res.candidates[1].score : null,
+        },
+      });
+    } catch {
+      setAuto({ running: false, info: null });
+    }
+  };
 
   const setItem = useCallback((itemId: string, count: number, rare: number) => {
     setOwned((prev) => {
@@ -234,6 +263,17 @@ export default function Planner() {
           </Select>
 
           <Button
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={!ready || auto.running || activeRooms.length === 0}
+            onClick={pickStrategy}
+            title="Try every way of splitting roles across your rooms and keep the best"
+            data-testid="button-auto-strategy"
+          >
+            {auto.running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+            Pick strategy for me
+          </Button>
+          <Button
             variant="outline"
             size="sm"
             className="h-8 gap-1.5 text-xs"
@@ -292,12 +332,15 @@ export default function Planner() {
               ownedCount={ownedList.reduce((a, o) => a + o.count + o.rare, 0)}
             />
 
+            {auto.info && <StrategyCard info={auto.info} onClose={() => setAuto({ running: false, info: null })} />}
+
             {!isLoading && ready && !hasInventory && (
               <Card className="p-5 text-sm">
                 <p className="font-medium">Start with the furniture you own</p>
                 <p className="mt-1 text-muted-foreground">
-                  Use Add furniture on the left. Every piece you add is saved and the layout below recomputes. Rooms are
-                  set to Stimulation, Health and Mutation by default; change any room goal on its card.
+                  Use Add furniture on the left. Every piece you add is saved and the layout below recomputes. Rooms start
+                  as elite breeding, holding and a feeder nursery. Once your furniture is in, press Pick strategy for me
+                  to test every way of splitting those roles across your rooms.
                 </p>
               </Card>
             )}
@@ -322,6 +365,44 @@ export default function Planner() {
         </main>
       </div>
     </div>
+  );
+}
+
+interface AutoInfo {
+  assign: Array<{ roomId: string; role: string; cats: number }>;
+  tried: number;
+  margin: number | null;
+}
+
+function StrategyCard({ info, onClose }: { info: AutoInfo; onClose: () => void }) {
+  return (
+    <Card className="border-primary/40 p-4" data-testid="card-strategy">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">Strategy picked for your furniture</h3>
+          <p className="text-xs text-muted-foreground">
+            Tried {info.tried} way{info.tried === 1 ? "" : "s"} of splitting roles across your rooms and kept the highest
+            scoring one{info.margin !== null ? ` (${info.margin.toFixed(1)} points ahead of the runner-up)` : ""}.
+          </p>
+        </div>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Dismiss" data-testid="button-dismiss-strategy">
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <ul className="mt-3 grid gap-2 sm:grid-cols-3">
+        {info.assign.map((a) => (
+          <li key={a.roomId} className="rounded-md border border-border px-3 py-2 text-xs" data-testid={`strategy-${a.roomId}`}>
+            <p className="font-medium">{ROOMS[a.roomId].label}</p>
+            <p className="text-muted-foreground">
+              {PRESET_BY_ID[a.role]?.label ?? a.role} · {a.cats} cats
+            </p>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Cat counts are defaults; set yours on each room card and the layout recomputes.
+      </p>
+    </Card>
   );
 }
 
