@@ -4,7 +4,7 @@ import { apiRequest, API_BASE } from "@/lib/queryClient";
 import { FURNITURE_BY_ID, HOUSES, ROOMS, statsOf } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
-import { runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
+import { EFFORTS, effortFor, runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
 import { DEFAULT_ROOM_PRESET, PRESET_BY_ID, goalFromPreset, migrateGoal } from "@/lib/presets";
 import { InventoryPanel, type Owned } from "@/components/inventory-panel";
 import { RoomCard } from "@/components/room-card";
@@ -23,6 +23,7 @@ interface HouseSetting {
 }
 interface Prefs {
   appealWeight: number;
+  effort?: string;
 }
 interface StateResponse {
   inventory: Array<{ itemId: string; count: number; rare: number }>;
@@ -66,7 +67,10 @@ export default function Planner() {
   const [prefs, setPrefs] = useState<Prefs>({ appealWeight: 0.2 });
   const [savingInv, setSavingInv] = useState(0);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [seed, setSeed] = useState(1337);
+  const [deepRun, setDeepRun] = useState(0);
+  const deepPending = useRef(false);
+  const [focus, setFocus] = useState<string | null>(null);
+  const seed = 1337;
   const warmRef = useRef<WarmStart | null>(null);
   const [mobileTab, setMobileTab] = useState<"furniture" | "rooms">("rooms");
   const [auto, setAuto] = useState<{ running: boolean; info: AutoInfo | null }>({ running: false, info: null });
@@ -162,10 +166,22 @@ export default function Planner() {
   );
   const goalList = useMemo(() => activeRooms.map(goalFor), [activeRooms.join(","), goalFor]);
 
+  // "Search deeper" runs one exhaustive pass on top of the current layout
+  const effort = deepPending.current ? effortFor("max") : effortFor(prefs.effort ?? "normal");
   const req = ready
-    ? { goals: goalList, owned: ownedList, appealWeight: prefs.appealWeight, warm: warmRef.current, timeBudgetMs: 900, seed }
+    ? { goals: goalList, owned: ownedList, appealWeight: prefs.appealWeight, warm: warmRef.current, effort, seed: seed + deepRun }
     : null;
-  const { result, running } = useOptimizer(req, [ready, JSON.stringify(ownedList), JSON.stringify(goalList), prefs.appealWeight, seed]);
+  const { result, running } = useOptimizer(req, [
+    ready,
+    JSON.stringify(ownedList),
+    JSON.stringify(goalList),
+    prefs.appealWeight,
+    prefs.effort,
+    deepRun,
+  ]);
+  useEffect(() => {
+    if (!running) deepPending.current = false;
+  }, [running]);
 
   // remember the layout so the next recompute starts from it (keeps the house stable)
   useEffect(() => {
@@ -275,18 +291,31 @@ export default function Planner() {
             {auto.running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
             Pick strategy for me
           </Button>
+          <Select value={prefs.effort ?? "normal"} onValueChange={(v) => setPrefs({ ...prefs, effort: v })}>
+            <SelectTrigger className="h-8 w-[160px] text-xs" data-testid="select-effort" title="How long each recompute searches. Same setting, same furniture, same layout, on any device.">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EFFORTS.map((e) => (
+                <SelectItem key={e.id} value={e.id} title={e.hint}>
+                  {e.label} search
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            disabled={!ready || running}
             onClick={() => {
-              warmRef.current = null;
-              setSeed((s) => s + 1);
+              deepPending.current = true;
+              setDeepRun((n) => n + 1);
             }}
-            title="Throw away the current layout and search again from scratch"
-            data-testid="button-reroll"
+            title="One exhaustive pass starting from the current layout. Keeps it unless something clearly better turns up."
+            data-testid="button-deeper"
           >
-            <Dices className="h-3.5 w-3.5" /> Fresh search
+            <Dices className="h-3.5 w-3.5" /> Search deeper
           </Button>
           <Button
             variant="ghost"
@@ -334,6 +363,8 @@ export default function Planner() {
               exportHref={`${API_BASE}/api/export`}
               onImport={importItems}
               saving={savingInv > 0 || savingSettings}
+              focus={focus}
+              onFocus={setFocus}
             />
           ) : (
             <div className="space-y-3 p-4">
@@ -351,6 +382,9 @@ export default function Planner() {
             <SummaryBar
               running={running}
               iterations={result?.iterations ?? 0}
+              effort={effort}
+              chain={result?.chain ?? 0}
+              score={result?.totalScore ?? 0}
               ms={result?.ms ?? 0}
               appeal={result?.houseAppeal ?? 0}
               placedCount={(result?.rooms ?? []).reduce((a, r) => a + r.placements.length, 0)}
@@ -380,6 +414,8 @@ export default function Planner() {
                     result={resultByRoom[r]}
                     stale={running}
                     onGoal={(g) => setGoals((prev) => ({ ...prev, [r]: g }))}
+                    focus={focus}
+                    onFocus={setFocus}
                   />
                 ))}
 
@@ -434,6 +470,9 @@ function StrategyCard({ info, onClose }: { info: AutoInfo; onClose: () => void }
 function SummaryBar({
   running,
   iterations,
+  effort,
+  chain,
+  score,
   ms,
   appeal,
   placedCount,
@@ -441,30 +480,48 @@ function SummaryBar({
 }: {
   running: boolean;
   iterations: number;
+  effort: number;
+  chain: number;
+  score: number;
   ms: number;
   appeal: number;
   placedCount: number;
   ownedCount: number;
 }) {
+  const pct = running ? Math.min(100, Math.round((iterations / Math.max(1, effort)) * 100)) : 100;
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground" data-testid="status-optimizer">
-      <span className="flex items-center gap-1.5">
-        {running ? (
-          <>
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Optimizing layout
-          </>
-        ) : (
-          <>Searched {iterations.toLocaleString()} layouts in {(ms / 1000).toFixed(1)}s</>
-        )}
-      </span>
-      <span>
-        <span className="font-mono text-foreground">{placedCount}</span> of{" "}
-        <span className="font-mono text-foreground">{ownedCount}</span> pieces placed
-      </span>
-      <span>
-        House Appeal <span className="font-mono" style={{ color: "hsl(var(--stat-a))" }}>{appeal}</span>
-        <span className="ml-1">(100+ and 200+ improve strays)</span>
-      </span>
+    <div className="space-y-1.5" data-testid="status-optimizer">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          {running ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Searching layouts, {pct}%
+            </>
+          ) : (
+            <>
+              Searched {iterations.toLocaleString()} layouts in {(ms / 1000).toFixed(1)}s
+              {chain === 0 ? ", kept your previous layout (improved where possible)" : ""}
+            </>
+          )}
+        </span>
+        <span>
+          Score <span className="font-mono text-foreground">{score.toFixed(1)}</span>
+        </span>
+        <span>
+          <span className="font-mono text-foreground">{placedCount}</span> of{" "}
+          <span className="font-mono text-foreground">{ownedCount}</span> pieces placed
+        </span>
+        <span>
+          House Appeal <span className="font-mono" style={{ color: "hsl(var(--stat-a))" }}>{appeal}</span>
+          <span className="ml-1">(100+ and 200+ improve strays)</span>
+        </span>
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-200"
+          style={{ width: `${pct}%`, opacity: running ? 1 : 0.35 }}
+        />
+      </div>
     </div>
   );
 }
@@ -527,10 +584,13 @@ function About() {
           the attic roof shape come from the game's house data.
         </p>
         <p>
-          The optimizer is a search, not an exact solver: it builds a greedy layout (best stat per tile first), then
-          keeps pulling pieces out and repacking for about a second, keeping any change that scores higher. Comfort
-          limits are enforced with a penalty. Your last layout is kept as the starting point, so adding a piece only
-          nudges the plan instead of reshuffling everything. Fresh search starts over.
+          The optimizer is a deterministic search, not an exact solver: same furniture, same goals, same search level
+          gives the same layout on every device. It builds a greedy layout (best stat per tile first), then runs a
+          fixed number of ruin-and-repack rounds from several starting points, keeping changes that score higher and
+          occasionally accepting worse ones early to escape dead ends. Small pieces are pushed onto shelves so the
+          scarce floor width goes to big pieces. Comfort limits are enforced with a penalty. Your last layout is one
+          of the starting points and wins ties, so adding a piece nudges the plan instead of reshuffling the house.
+          Search deeper runs one exhaustive pass on top of it.
         </p>
         <p>
           Assumptions to check in game: rare pieces count 2× stats; the ground floor rooms are plain 16×7 rectangles; wall

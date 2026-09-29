@@ -48,10 +48,10 @@ export function autoStrategy(
     bySize.forEach((r, i) => (assign[r] = sortedRoles[i]));
     perms = [roomIds.map((r) => assign[r])];
   }
-  const each = Math.max(90, Math.min(300, Math.floor(2400 / perms.length)));
+  const each = Math.max(150, Math.min(600, Math.floor(2400 / perms.length)));
   const candidates: AutoCandidate[] = perms.map((p, i) => {
     const goals = roomIds.map((r, j) => goalFromPreset(r, p[j], catsByRole[p[j]]));
-    const res = optimize({ ...input, goals, warm: null, timeBudgetMs: each, seed: 7 + i });
+    const res = optimize({ ...input, goals, warm: null, effort: each, seed: 7 + i });
     return { goals, score: res.totalScore };
   });
   candidates.sort((a, b) => b.score - a.score);

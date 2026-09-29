@@ -32,8 +32,13 @@ export function InventoryPanel({
   exportHref,
   onImport,
   saving,
+  onFocus,
+  focus,
 }: {
   owned: Owned;
+  /** hover a row to light up that piece in every room and show its stat effect */
+  onFocus?: (itemId: string | null) => void;
+  focus?: string | null;
   onSet: (itemId: string, count: number, rare: number) => void;
   placed: Record<string, { n: number; rooms: string[] }>;
   exportHref: string;
@@ -227,12 +232,18 @@ export function InventoryPanel({
             )}
           </div>
         ) : (
-          <ul className="divide-y divide-border">
+          <ul className="divide-y divide-border" onMouseLeave={() => onFocus?.(null)}>
             {rows.map(({ f, count, rare }) => {
               const pl = placed[f.id];
               const total = count + rare;
               return (
-                <li key={f.id} className="flex items-start gap-3 px-4 py-2.5" data-testid={`row-owned-${f.id}`}>
+                <li
+                  key={f.id}
+                  className={cn("flex items-start gap-3 px-4 py-2.5 transition-colors", focus === f.id && "bg-accent/60")}
+                  onMouseEnter={() => onFocus?.(f.id)}
+                  onMouseLeave={() => onFocus?.(null)}
+                  data-testid={`row-owned-${f.id}`}
+                >
                   <Glyph f={f} className="mt-0.5" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">

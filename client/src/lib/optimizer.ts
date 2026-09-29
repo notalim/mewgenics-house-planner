@@ -29,8 +29,22 @@ export interface OptimizeInput {
   owned: OwnedItem[];
   appealWeight: number;
   warm?: WarmStart | null;
-  timeBudgetMs?: number;
+  /**
+   * Search effort in LNS iterations. Deterministic: the same inventory, goals, effort and seed always
+   * give the same layout, whatever device runs it. ~600 iterations per second on a laptop.
+   */
+  effort?: number;
   seed?: number;
+  /**
+   * Keep the previous layout (warm start chain) unless a fresh search beats it by more than this.
+   * Stops the whole house reshuffling when one small piece is added. Default 0.35 points.
+   */
+  stabilityMargin?: number;
+  /** Called with the best layout so far every `progressEvery` iterations. */
+  onProgress?: (res: OptimizeResult) => void;
+  progressEvery?: number;
+  /** @deprecated kept for old callers; converted to effort */
+  timeBudgetMs?: number;
 }
 
 /** A warm start is just the placement order per room: [itemId, rare][] */
@@ -63,7 +77,12 @@ export interface OptimizeResult {
   leftovers: Array<{ itemId: string; rare: boolean; count: number; reason: "no-space" | "not-useful" }>;
   totalScore: number;
   iterations: number;
+  effort: number;
   ms: number;
+  /** true while the search is still running (progress snapshots) */
+  partial?: boolean;
+  /** which start won: 0 = previous layout, 1+ = fresh chains */
+  chain: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -93,6 +112,7 @@ interface Shape {
   base: Record<StatKey, number>;
   cost: number;
   bodyCount: number;
+  surfCount: number;
 }
 
 function buildShape(f: Furniture): Shape {
@@ -115,7 +135,7 @@ function buildShape(f: Furniture): Shape {
   for (const k of Object.keys(base) as StatKey[]) base[k] = f.stats[k] ?? 0;
   // Surfaces create room for stacked pieces, so they are cheaper than solid tiles.
   const cost = Math.max(0.6, bodyCount - 0.5 * surf);
-  return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount };
+  return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount, surfCount: surf };
 }
 
 /* ------------------------------------------------------------------ */
@@ -127,6 +147,14 @@ interface Unit {
   rare: boolean;
 }
 
+interface Placed {
+  unit: Unit;
+  x: number;
+  y: number;
+  host: number | null;
+  restsOn: Placement["restsOn"];
+}
+
 class RoomState {
   def: RoomDef;
   W: number;
@@ -135,7 +163,7 @@ class RoomState {
   occ: Int16Array; // placement index or -1
   occType: Uint8Array; // 0 none, 1 solid, 2 surface
   supUsed: Uint8Array;
-  placed: Array<{ unit: Unit; x: number; y: number; host: number | null; restsOn: Placement["restsOn"] }>;
+  placed: Placed[];
   stats: Record<StatKey, number>;
   used = 0;
 
@@ -189,20 +217,75 @@ class RoomState {
     return true;
   }
 
-  findSpot(s: Shape): [number, number] | null {
+  /** true if the cell is solid from the packing point of view (wall, roof, floor edge or furniture) */
+  private solid(cx: number, cy: number): boolean {
+    if (cx < 0 || cy < 0 || cx >= this.W || cy >= this.H) return true;
+    const idx = cy * this.W + cx;
+    return this.base[idx] !== 0 || this.occ[idx] !== -1;
+  }
+
+  /** is this an open surface that a grounded piece could still use? */
+  private openSurfaceBelow(cx: number, cy: number): boolean {
+    if (cy - 1 < 0) return false;
+    const idx = (cy - 1) * this.W + cx;
+    if (this.supUsed[idx]) return false;
+    if (this.base[idx] === 2 && cy - 1 === 0) return true; // room floor
+    return this.occ[idx] !== -1 && this.occType[idx] === 2; // top of another piece
+  }
+
+  /**
+   * Packing quality of a position, higher is better. Rewards touching walls/other pieces (dense
+   * packing, fewer stranded gaps), keeps grounded pieces low and hanging pieces high, and penalises
+   * wall pieces that cover a still-usable surface (they would steal a stacking slot).
+   */
+  placementQuality(s: Shape, x: number, y: number): number {
+    let contact = 0;
+    let shadow = 0;
+    const b = s.body;
+    for (let i = 0; i < b.length; i += 3) {
+      const cx = x + b[i];
+      const cy = y + b[i + 1];
+      if (this.solid(cx - 1, cy)) contact++;
+      if (this.solid(cx + 1, cy)) contact++;
+      if (this.solid(cx, cy + 1)) contact++;
+      if (this.solid(cx, cy - 1)) contact++;
+      if (s.kind !== "grounded" && s.kind !== "mixed" && this.openSurfaceBelow(cx, cy)) shadow++;
+    }
+    let q = contact - 3 * shadow;
+    if (s.kind === "grounded" || s.kind === "mixed") {
+      q += -0.9 * y - 0.05 * x;
+      // floor width is the scarce resource: small pieces should climb onto shelves and tables
+      if (y === 0 && s.surfCount < 3) q -= FLOOR_PENALTY;
+    }
+    else if (s.kind === "hanging") q += 0.9 * y + 0.05 * x;
+    else q += 0.6 * y + 0.03 * x; // wall pieces: high and right, out of the way
+    return q;
+  }
+
+  /** All feasible positions, sorted best first. */
+  spots(s: Shape): Array<[number, number, number]> {
     const { W, H } = this;
     const maxX = W - s.w;
     const maxY = H - s.h;
-    if (maxX < 0 || maxY < 0) return null;
-    if (s.kind === "grounded" || s.kind === "mixed") {
-      for (let y = 0; y <= maxY; y++) for (let x = 0; x <= maxX; x++) if (this.canPlace(s, x, y)) return [x, y];
-    } else if (s.kind === "hanging") {
-      for (let y = maxY; y >= 0; y--) for (let x = 0; x <= maxX; x++) if (this.canPlace(s, x, y)) return [x, y];
-    } else {
-      // floating wall pieces: keep them high and to the right so floor and low surfaces stay open
-      for (let y = maxY; y >= 0; y--) for (let x = maxX; x >= 0; x--) if (this.canPlace(s, x, y)) return [x, y];
+    const out: Array<[number, number, number]> = [];
+    if (maxX < 0 || maxY < 0) return out;
+    for (let y = 0; y <= maxY; y++)
+      for (let x = 0; x <= maxX; x++) if (this.canPlace(s, x, y)) out.push([x, y, this.placementQuality(s, x, y)]);
+    out.sort((a, b) => b[2] - a[2]);
+    return out;
+  }
+
+  /** Best position, optionally picking among the top few at random (diversification). */
+  findSpot(s: Shape, rnd?: () => number, spread = 0): [number, number] | null {
+    const sp = this.spots(s);
+    if (!sp.length) return null;
+    if (rnd && spread > 0 && sp.length > 1) {
+      // geometric choice: mostly the best, sometimes 2nd/3rd
+      let i = 0;
+      while (i < sp.length - 1 && i < 4 && rnd() < spread) i++;
+      return [sp[i][0], sp[i][1]];
     }
-    return null;
+    return [sp[0][0], sp[0][1]];
   }
 
   place(s: Shape, unit: Unit, x: number, y: number) {
@@ -233,12 +316,14 @@ class RoomState {
 }
 
 const STAT_ORDER: StatKey[] = ["c", "s", "h", "m", "a"];
+const STAT_NAME: Record<StatKey, string> = { c: "Comfort", s: "Stimulation", h: "Health", m: "Mutation", a: "Appeal" };
 
 /* ------------------------------------------------------------------ */
 /* Scoring                                                              */
 /* ------------------------------------------------------------------ */
 const COMFORT_PENALTY = 4;
-/** Softer penalty while constructing, so trade-off pieces get tried and then balanced. */
+/** floor width is the scarce resource in 16-wide rooms, so pieces that can stack are pushed up onto shelves */
+const FLOOR_PENALTY = 5;
 const FILL_PENALTY = 1.5;
 
 function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENALTY): number {
@@ -283,8 +368,8 @@ const poolKey = (itemId: string, rare: boolean) => `${itemId}|${rare ? 1 : 0}`;
 
 export function optimize(input: OptimizeInput): OptimizeResult {
   const t0 = Date.now();
-  const budget = input.timeBudgetMs ?? 900;
-  const rnd = mulberry32(input.seed ?? 1337);
+  const effort = Math.max(0, Math.round(input.effort ?? (input.timeBudgetMs ? input.timeBudgetMs * 0.6 : 2500)));
+  const seed = input.seed ?? 1337;
   const shapes: Record<string, Shape> = {};
   const aW = input.appealWeight;
 
@@ -331,6 +416,16 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     }
     return pool;
   };
+  const pushPool = (pool: Map<string, Unit[]>, u: Unit) => {
+    const k = poolKey(u.itemId, u.rare);
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k)!.push(u);
+  };
+  const clonePool = (p: Map<string, Unit[]>) => {
+    const n = new Map<string, Unit[]>();
+    p.forEach((v, k) => n.set(k, v.slice()));
+    return n;
+  };
 
   const totalScore = (rooms: RoomState[]) => {
     let s = 0;
@@ -354,11 +449,32 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     return roomScore(st, g, FILL_PENALTY) + aW * st.a - before;
   };
 
+  /**
+   * The candidate doesn't fit as the room stands. Rebuild the room with the candidate included in
+   * canonical order (big pieces first). Accept only if nothing already placed is lost.
+   */
+  const insertWithRepack = (sol: Solution, ri: number, u: Unit, rnd: () => number, attempts = 1): boolean => {
+    const room = sol.rooms[ri];
+    const sh = shapes[u.itemId];
+    if (room.used + sh.bodyCount > room.def.free) return false;
+    const order = room.placed.map((p) => p.unit);
+    order.push(u);
+    for (let a = 0; a < attempts; a++) {
+      const scratch = new Map<string, Unit[]>();
+      const r2 = a === 0 ? replay(room.def, order, scratch) : replay(room.def, order, scratch, rnd, 0.3, 60);
+      if (r2.placed.length === order.length) {
+        sol.rooms[ri] = r2;
+        return true;
+      }
+    }
+    return false;
+  };
+
   /** Greedy fill: repeatedly add the best density candidate that fits. */
-  const fill = (sol: Solution, roomIdx: number[], noise: number) => {
+  const fill = (sol: Solution, roomIdx: number[], noise: number, rnd: () => number, spread: number, repacks = 4, repackAttempts = 1) => {
     const blocked = new Set<string>();
-    for (let guard = 0; guard < 2000; guard++) {
-      let best: { ri: number; k: string; dens: number } | null = null;
+    let repackLeft = repacks;
+    for (let guard = 0; guard < 3000; guard++) {
       const cands: Array<{ ri: number; k: string; dens: number }> = [];
       sol.pool.forEach((units, k) => {
         if (!units.length) return;
@@ -374,54 +490,66 @@ export function optimize(input: OptimizeInput): OptimizeResult {
       });
       if (!cands.length) return;
       cands.sort((a, b) => b.dens - a.dens);
+      let placedOne = false;
       for (const c of cands) {
         const units = sol.pool.get(c.k)!;
         const sh = shapes[units[0].itemId];
         const room = sol.rooms[c.ri];
-        const spot = room.findSpot(sh);
+        const spot = room.findSpot(sh, rnd, spread);
         if (spot) {
           const u = units.shift()!;
           room.place(sh, u, spot[0], spot[1]);
-          best = c;
+          placedOne = true;
           break;
+        }
+        if (repackLeft > 0 && sh.bodyCount >= 3) {
+          repackLeft--;
+          if (insertWithRepack(sol, c.ri, units[0], rnd, repackAttempts)) {
+            units.shift();
+            placedOne = true;
+            break;
+          }
         }
         blocked.add(c.ri + "#" + c.k);
       }
-      if (!best) return;
+      if (!placedOne) return;
     }
   };
 
-  /** Rebuild a room from an order of units; units that no longer fit go back to the pool. */
-  const replay = (def: RoomDef, order: Unit[], pool: Map<string, Unit[]>) => {
-    const r = new RoomState(def);
-    for (const u of order) {
+  /**
+   * Packing order: big grounded pieces (shelves and tables first, they carry others), then hanging,
+   * then wall pieces last since they can go anywhere. `jitter` shuffles this a little for diversity.
+   */
+  const kindRank = (k: Shape["kind"]) => (k === "grounded" || k === "mixed" ? 0 : k === "hanging" ? 1 : 2);
+  const canonical = (units: Unit[], rnd?: () => number, jitter = 0) => {
+    const keyed = units.map((u) => {
       const sh = shapes[u.itemId];
-      const spot = r.findSpot(sh);
+      let k = kindRank(sh.kind) * 1000 - sh.bodyCount * 10 - sh.surfCount * 6 - sh.h * 2;
+      if (rnd && jitter > 0) k += (rnd() - 0.5) * jitter;
+      return { u, k };
+    });
+    keyed.sort((a, b) => a.k - b.k);
+    return keyed.map((x) => x.u);
+  };
+
+  /** Rebuild a room from an order of units; units that no longer fit go back to the pool. */
+  const replay = (def: RoomDef, order: Unit[], pool: Map<string, Unit[]>, rnd?: () => number, spread = 0, jitter = 0) => {
+    const r = new RoomState(def);
+    for (const u of canonical(order, rnd, jitter)) {
+      const sh = shapes[u.itemId];
+      const spot = r.findSpot(sh, rnd, spread);
       if (spot) r.place(sh, u, spot[0], spot[1]);
-      else {
-        const k = poolKey(u.itemId, u.rare);
-        if (!pool.has(k)) pool.set(k, []);
-        pool.get(k)!.push(u);
-      }
+      else pushPool(pool, u);
     }
     return r;
   };
 
-  const clonePool = (p: Map<string, Unit[]>) => {
-    const n = new Map<string, Unit[]>();
-    p.forEach((v, k) => n.set(k, v.slice()));
-    return n;
-  };
-
   const allIdx = goals.map((_, i) => i);
+  const emptyResult = () => toResult({ rooms: goals.map((g) => new RoomState(input.rooms[g.roomId])), pool: makePool(allUnits) }, goals, shapes, input, 0, 0, effort, Date.now() - t0, unreachable, 1);
+  if (!goals.length || !allUnits.length) return emptyResult();
 
-  // ---- fresh greedy
-  const fresh: Solution = { rooms: goals.map((g) => new RoomState(input.rooms[g.roomId])), pool: makePool(allUnits) };
-  fill(fresh, allIdx, 0);
-  let best = fresh;
-  let bestScore = totalScore(fresh.rooms);
-
-  // ---- warm start from previous layout
+  /* ---------------- starting points ---------------- */
+  const starts: Array<{ sol: Solution; label: number }> = [];
   if (input.warm) {
     const pool = makePool(allUnits);
     const rooms = goals.map((g) => {
@@ -433,73 +561,192 @@ export function optimize(input: OptimizeInput): OptimizeResult {
       return replay(input.rooms[g.roomId], order, pool);
     });
     const warm: Solution = { rooms, pool };
-    fill(warm, allIdx, 0);
-    const ws = totalScore(warm.rooms);
-    if (ws >= bestScore - 1e-9) {
-      best = warm;
-      bestScore = ws;
+    fill(warm, allIdx, 0, mulberry32(seed), 0);
+    starts.push({ sol: warm, label: 0 });
+  }
+  const nFresh = effort >= 1500 ? 3 : effort >= 400 ? 2 : 1;
+  for (let c = 0; c < nFresh; c++) {
+    const rnd = mulberry32(seed + 101 * (c + 1));
+    const sol: Solution = { rooms: goals.map((g) => new RoomState(input.rooms[g.roomId])), pool: makePool(allUnits) };
+    fill(sol, allIdx, c === 0 ? 0 : 0.5, rnd, c === 0 ? 0 : 0.3);
+    starts.push({ sol, label: c + 1 });
+  }
+
+  /* ---------------- annealed large neighbourhood search ---------------- */
+  let globalBest = starts[0].sol;
+  let globalBestScore = totalScore(globalBest.rooms);
+  let globalChain = starts[0].label;
+  for (const s of starts) {
+    const sc = totalScore(s.sol.rooms);
+    if (sc > globalBestScore + 1e-9) {
+      globalBest = s.sol;
+      globalBestScore = sc;
+      globalChain = s.label;
     }
   }
 
-  // ---- large neighbourhood search: ruin part of a room, refill everything
-  let cur = best;
-  let curScore = bestScore;
+  const perChain = Math.floor(effort / starts.length);
   let iterations = 0;
-  if (goals.length && allUnits.length) {
-    while (Date.now() - t0 < budget) {
+  let lastProgress = 0;
+  const progressEvery = input.progressEvery ?? 250;
+  const report = () => {
+    if (!input.onProgress) return;
+    input.onProgress(toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain, true));
+  };
+
+  let warmChain: { sol: Solution; score: number } | null = null;
+  const T0 = 0.3;
+  const T1 = 0.02;
+  const lnsRepackAttempts = 3;
+  const lnsRepacks = 6;
+
+  for (const start of starts) {
+    const rnd = mulberry32(seed * 7 + start.label * 9973);
+    let cur = start.sol;
+    let curScore = totalScore(cur.rooms);
+    let chainBest = cur;
+    let chainBestScore = curScore;
+    let sinceImprove = 0;
+
+    for (let it = 0; it < perChain; it++) {
       iterations++;
+      const frac = it / Math.max(1, perChain);
+      const T = T0 * Math.pow(T1 / T0, frac);
+
       const pool = clonePool(cur.pool);
-      const ri = Math.floor(rnd() * goals.length);
-      const room = cur.rooms[ri];
-      const order = room.placed.map((p) => p.unit);
-      const nRemove = Math.min(order.length, 1 + Math.floor(rnd() * 5));
-      const kept = order.slice();
-      for (let i = 0; i < nRemove && kept.length; i++) {
-        const j = Math.floor(rnd() * kept.length);
-        const [u] = kept.splice(j, 1);
-        const k = poolKey(u.itemId, u.rare);
-        if (!pool.has(k)) pool.set(k, []);
-        pool.get(k)!.push(u);
-      }
-      // occasional shuffle of placement order changes the packing
-      if (rnd() < 0.35 && kept.length > 1) {
-        const a = Math.floor(rnd() * kept.length);
-        const b = Math.floor(rnd() * kept.length);
-        [kept[a], kept[b]] = [kept[b], kept[a]];
-      }
       const rooms = cur.rooms.slice();
-      rooms[ri] = replay(room.def, kept, pool);
-      const cand: Solution = { rooms, pool };
-      // only refill the touched room plus one random other room (cheaper, still lets items migrate)
-      const others = allIdx.filter((i) => i !== ri);
-      const touched = [ri];
-      if (others.length) {
-        const o = others[Math.floor(rnd() * others.length)];
-        // other room must be cloned before mutation
-        rooms[o] = replay(cur.rooms[o].def, cur.rooms[o].placed.map((p) => p.unit), pool);
-        touched.push(o);
+      const touched: number[] = [];
+      const move = rnd();
+
+      const ruinRoom = (ri: number, mode: number) => {
+        const room = cur.rooms[ri];
+        const order = room.placed.map((p) => p.unit);
+        let kept = order.slice();
+        if (mode === 0) {
+          // random pieces
+          const nRemove = Math.min(kept.length, 1 + Math.floor(rnd() * 5));
+          for (let i = 0; i < nRemove && kept.length; i++) {
+            const j = Math.floor(rnd() * kept.length);
+            const [u] = kept.splice(j, 1);
+            pushPool(pool, u);
+          }
+        } else if (mode === 1) {
+          // a vertical band: everything whose body touches columns [x0, x0+w)
+          const x0 = 1 + Math.floor(rnd() * (room.W - 2));
+          const w = 1 + Math.floor(rnd() * 4);
+          kept = [];
+          for (const p of room.placed) {
+            const sh = shapes[p.unit.itemId];
+            let hit = false;
+            for (let i = 0; i < sh.body.length && !hit; i += 3) {
+              const cx = p.x + sh.body[i];
+              if (cx >= x0 && cx < x0 + w) hit = true;
+            }
+            if (hit) pushPool(pool, p.unit);
+            else kept.push(p.unit);
+          }
+        } else if (mode === 2) {
+          // every copy of one item type (lets a whole family be swapped out)
+          if (order.length) {
+            const pick = order[Math.floor(rnd() * order.length)];
+            kept = [];
+            for (const u of order) {
+              if (u.itemId === pick.itemId && u.rare === pick.rare) pushPool(pool, u);
+              else kept.push(u);
+            }
+          }
+        } else {
+          // the biggest piece plus a couple of random ones
+          if (order.length) {
+            let bi = 0;
+            for (let i = 1; i < order.length; i++) if (shapes[order[i].itemId].bodyCount > shapes[order[bi].itemId].bodyCount) bi = i;
+            const [u] = kept.splice(bi, 1);
+            pushPool(pool, u);
+            const extra = Math.min(kept.length, Math.floor(rnd() * 3));
+            for (let i = 0; i < extra && kept.length; i++) {
+              const j = Math.floor(rnd() * kept.length);
+              const [v] = kept.splice(j, 1);
+              pushPool(pool, v);
+            }
+          }
+        }
+        rooms[ri] = replay(room.def, kept, pool, rnd, 0.25, rnd() < 0.4 ? 40 : 0);
+        touched.push(ri);
+      };
+
+      if (move < 0.55 || goals.length === 1) {
+        // one room ruined, one other room re-opened so pieces can migrate
+        const ri = Math.floor(rnd() * goals.length);
+        ruinRoom(ri, Math.floor(rnd() * 4));
+        if (goals.length > 1) {
+          const others = allIdx.filter((i) => i !== ri);
+          const o = others[Math.floor(rnd() * others.length)];
+          rooms[o] = replay(cur.rooms[o].def, cur.rooms[o].placed.map((p) => p.unit), pool, undefined, 0);
+          touched.push(o);
+        }
+      } else if (move < 0.85) {
+        // two rooms ruined at once: real exchanges between rooms
+        const a = Math.floor(rnd() * goals.length);
+        let b = Math.floor(rnd() * (goals.length - 1));
+        if (b >= a) b++;
+        ruinRoom(a, Math.floor(rnd() * 4));
+        ruinRoom(b, Math.floor(rnd() * 4));
+      } else {
+        // repack one room from scratch in a new order (pure geometry move)
+        const ri = Math.floor(rnd() * goals.length);
+        const order = cur.rooms[ri].placed.map((p) => p.unit);
+        rooms[ri] = replay(cur.rooms[ri].def, order, pool, rnd, 0.35, 120);
+        touched.push(ri);
       }
-      fill(cand, touched, 0.6);
+
+      const cand: Solution = { rooms, pool };
+      fill(cand, touched, 0.6, rnd, 0.15, lnsRepacks, lnsRepackAttempts);
       const sc = totalScore(cand.rooms);
-      if (sc >= curScore - 1e-9 || rnd() < 0.02) {
+      const delta = sc - curScore;
+      if (delta >= -1e-9 || rnd() < Math.exp(delta / T)) {
         cur = cand;
         curScore = sc;
-        if (sc > bestScore + 1e-9) {
-          best = cand;
-          bestScore = sc;
-        }
+        if (sc > chainBestScore + 1e-9) {
+          chainBest = cand;
+          chainBestScore = sc;
+          sinceImprove = 0;
+        } else sinceImprove++;
+      } else sinceImprove++;
+
+      // stuck for a long while: jump back to the chain's best
+      if (sinceImprove > 400) {
+        cur = chainBest;
+        curScore = chainBestScore;
+        sinceImprove = 0;
+      }
+
+      if (chainBestScore > globalBestScore + 1e-9) {
+        globalBest = chainBest;
+        globalBestScore = chainBestScore;
+        globalChain = start.label;
+      }
+      if (iterations - lastProgress >= progressEvery) {
+        lastProgress = iterations;
+        report();
       }
     }
+    if (start.label === 0) warmChain = { sol: chainBest, score: chainBestScore };
   }
 
-  // ---- final polish: a deterministic greedy pass on the best solution
-  fill(best, allIdx, 0);
-  bestScore = totalScore(best.rooms);
+  // ---- stability: prefer the chain that started from the previous layout unless clearly beaten
+  if (warmChain && globalChain !== 0 && globalBestScore - warmChain.score <= (input.stabilityMargin ?? 0.35)) {
+    globalBest = warmChain.sol;
+    globalBestScore = warmChain.score;
+    globalChain = 0;
+  }
 
-  return toResult(best, goals, shapes, input, bestScore, iterations, Date.now() - t0, unreachable);
+  // ---- final polish: deterministic greedy pass, then squeeze in anything left
+  const polishRnd = mulberry32(seed + 5);
+  fill(globalBest, allIdx, 0, polishRnd, 0, 60, 12);
+  globalBestScore = totalScore(globalBest.rooms);
+
+  return toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain);
 }
-
-const STAT_NAME: Record<StatKey, string> = { c: "Comfort", s: "Stimulation", h: "Health", m: "Mutation", a: "Appeal" };
 
 function toResult(
   sol: Solution,
@@ -508,15 +755,18 @@ function toResult(
   input: OptimizeInput,
   score: number,
   iterations: number,
+  effort: number,
   ms: number,
-  unreachableNotes?: Record<string, string[]>,
+  unreachableNotes: Record<string, string[]>,
+  chain: number,
+  partial = false,
 ): OptimizeResult {
   let houseAppeal = 0;
   const rooms: RoomResult[] = sol.rooms.map((r, i) => {
     const g = goals[i];
     houseAppeal += r.stats.a;
     const stats = { ...r.stats, c: r.stats.c - Math.max(0, g.cats - 4) };
-    const notes: string[] = [...(unreachableNotes?.[g.roomId] ?? [])];
+    const notes: string[] = [...(unreachableNotes[g.roomId] ?? [])];
     let goalMet = notes.length === 0;
     if (g.minComfort !== null && stats.c < g.minComfort) {
       goalMet = false;
@@ -579,7 +829,7 @@ function toResult(
     leftovers.push({ itemId, rare: rare === "1", count: units.length, reason: useful ? "no-space" : "not-useful" });
   });
   leftovers.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === "no-space" ? -1 : 1));
-  return { rooms, houseAppeal, leftovers, totalScore: score, iterations, ms };
+  return { rooms, houseAppeal, leftovers, totalScore: score, iterations, effort, ms, partial, chain };
 }
 
 export function toWarm(res: OptimizeResult): WarmStart {

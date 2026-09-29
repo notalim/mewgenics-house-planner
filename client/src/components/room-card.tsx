@@ -20,14 +20,36 @@ export function RoomCard({
   result,
   onGoal,
   stale,
+  focus,
+  onFocus,
 }: {
   def: RoomDef;
   goal: RoomGoal;
   result: RoomResult | undefined;
   onGoal: (g: RoomGoal) => void;
   stale: boolean;
+  /** item hovered anywhere in the app (inventory list or another room) */
+  focus: string | null;
+  onFocus: (itemId: string | null) => void;
 }) {
-  const [hover, setHover] = useState<number | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const setHover = (i: number | null) => {
+    setHoverIdx(i);
+    onFocus(i === null ? null : result?.placements[i]?.itemId ?? null);
+  };
+  const hover = hoverIdx;
+  // what the focused piece contributes to this room, shown on the stat strip
+  const focusStats = useMemo(() => {
+    if (!focus || !result) return null;
+    const mine = result.placements.filter((p) => p.itemId === focus);
+    if (!mine.length) return null;
+    const sum: Record<StatKey, number> = { c: 0, s: 0, h: 0, m: 0, a: 0 };
+    for (const p of mine) {
+      const st = statsOf(FURNITURE_BY_ID[p.itemId], p.rare);
+      for (const k of STAT_KEYS) sum[k] += st[k] ?? 0;
+    }
+    return { sum, n: mine.length };
+  }, [focus, result]);
   const preset = PRESET_BY_ID[goal.preset];
   const primary: StatKey | null = goal.target?.stat ?? preset?.primary ?? null;
 
@@ -57,10 +79,10 @@ export function RoomCard({
 
       <GoalControls goal={goal} onGoal={onGoal} roomId={def.id} />
 
-      <StatStrip result={result} goal={goal} primary={primary} />
+      <StatStrip result={result} goal={goal} primary={primary} focus={focusStats} />
 
       <div className={cn("px-4 pb-4 transition-opacity", stale && "opacity-60")}>
-        <RoomGrid def={def} result={result} hover={hover} setHover={setHover} />
+        <RoomGrid def={def} result={result} hover={hover} setHover={setHover} focus={focus} />
         <p className="mt-1.5 text-[11px] text-muted-foreground">
           Light top edge = stackable surface. Dashed outline = headroom the piece needs (like the spider on Spider TV):
           nothing from the room can be there, but other furniture can sit in it.
@@ -224,15 +246,35 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
   );
 }
 
-function StatStrip({ result, goal, primary }: { result: RoomResult | undefined; goal: RoomGoal; primary: StatKey | null }) {
+function StatStrip({
+  result,
+  goal,
+  primary,
+  focus,
+}: {
+  result: RoomResult | undefined;
+  goal: RoomGoal;
+  primary: StatKey | null;
+  focus: { sum: Record<StatKey, number>; n: number } | null;
+}) {
   return (
     <div className="grid grid-cols-5 gap-px border-b border-border bg-border">
       {STAT_KEYS.map((k) => {
         const v = result?.stats[k] ?? 0;
         const isPrimary = k === primary;
         const target = goal.target?.stat === k ? goal.target.value : null;
+        const delta = focus?.sum[k] ?? 0;
         return (
-          <div key={k} className="bg-card px-3 py-2" data-testid={`stat-${goal.roomId}-${k}`}>
+          <div key={k} className="relative bg-card px-3 py-2" data-testid={`stat-${goal.roomId}-${k}`}>
+            {focus && delta !== 0 && (
+              <span
+                className="absolute right-2 top-1.5 rounded-sm px-1 font-mono text-[11px] font-semibold"
+                style={{ color: `hsl(var(--stat-${k}))`, background: `hsl(var(--stat-${k}) / 0.15)` }}
+                data-testid={`stat-delta-${goal.roomId}-${k}`}
+              >
+                {delta > 0 ? `+${delta}` : delta}
+              </span>
+            )}
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
               <span style={isPrimary ? { color: `hsl(var(--stat-${k}))` } : undefined}>
                 {STAT_LABEL[k]}
@@ -290,11 +332,13 @@ function RoomGrid({
   result,
   hover,
   setHover,
+  focus,
 }: {
   def: RoomDef;
   result: RoomResult | undefined;
   hover: number | null;
   setHover: (i: number | null) => void;
+  focus: string | null;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
@@ -334,6 +378,7 @@ function RoomGrid({
 
   const items = result?.placements ?? [];
   const hovered = hover !== null ? items[hover] : null;
+  const focusHere = focus !== null && items.some((p) => p.itemId === focus);
 
   return (
     <div
@@ -366,13 +411,13 @@ function RoomGrid({
           }
           const cx = body.reduce((a, c) => a + c[0], 0) / body.length;
           const cy = body.reduce((a, c) => a + c[1], 0) / body.length;
-          const isHover = hover === i;
-          const dim = hover !== null && !isHover;
+          const isHover = hover === i || (focusHere && p.itemId === focus);
+          const dim = (hover !== null || focusHere) && !isHover;
           return (
             <g
               key={i}
               onMouseEnter={() => setHover(i)}
-              style={{ cursor: "default", opacity: dim ? 0.45 : 1, transition: "opacity 120ms" }}
+              style={{ cursor: "default", opacity: dim ? 0.4 : 1, transition: "opacity 120ms" }}
               data-testid={`grid-item-${def.id}-${i}`}
             >
               {f.cells
@@ -415,7 +460,7 @@ function RoomGrid({
                     opacity={0.55}
                   />
                 ))}
-              <g stroke={p.rare ? "hsl(var(--rare))" : "hsl(var(--background))"} strokeWidth={isHover ? 2.6 : p.rare ? 2 : 1.4}>
+              <g stroke={isHover ? "hsl(var(--foreground))" : p.rare ? "hsl(var(--rare))" : "hsl(var(--room-block))"} strokeWidth={isHover ? 2.6 : p.rare ? 2 : 1.4}>
                 {edges}
               </g>
               <text
@@ -426,7 +471,10 @@ function RoomGrid({
                 fontSize={C * 0.46}
                 fontFamily="var(--font-mono)"
                 fontWeight={600}
-                fill="hsl(var(--background))"
+                fill="hsl(var(--card))"
+                stroke="hsl(var(--room-block))"
+                strokeWidth={0.7}
+                paintOrder="stroke"
                 style={{ pointerEvents: "none" }}
               >
                 {p.step}
