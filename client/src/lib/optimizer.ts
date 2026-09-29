@@ -286,8 +286,30 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   const budget = input.timeBudgetMs ?? 900;
   const rnd = mulberry32(input.seed ?? 1337);
   const shapes: Record<string, Shape> = {};
-  const goals = input.goals.filter((g) => input.rooms[g.roomId]);
   const aW = input.appealWeight;
+
+  // Most a single room could reach in each stat if every positive piece went there. A floor above
+  // that is impossible, so it is dropped instead of making the optimizer refuse useful pieces.
+  const reach: Record<StatKey, number> = { c: 0, s: 0, h: 0, m: 0, a: 0 };
+  for (const o of input.owned) {
+    const f = input.items[o.itemId];
+    if (!f) continue;
+    const n = o.count + 2 * o.rare;
+    for (const k of STAT_ORDER) reach[k] += Math.max(0, f.stats[k] ?? 0) * n;
+  }
+  const unreachable: Record<string, string[]> = {};
+  const goals = input.goals
+    .filter((g) => input.rooms[g.roomId])
+    .map((g) => {
+      if (!g.mins) return g;
+      const mins: Partial<Record<StatKey, number>> = {};
+      for (const [k, v] of Object.entries(g.mins) as Array<[StatKey, number]>) {
+        if (v === undefined || v === null) continue;
+        if (v > reach[k]) (unreachable[g.roomId] ??= []).push(`${STAT_NAME[k]} ${v} is out of reach: all your pieces add up to +${reach[k]}`);
+        else mins[k] = v;
+      }
+      return { ...g, mins };
+    });
 
   // Build units
   let key = 0;
@@ -474,7 +496,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   fill(best, allIdx, 0);
   bestScore = totalScore(best.rooms);
 
-  return toResult(best, goals, shapes, input, bestScore, iterations, Date.now() - t0);
+  return toResult(best, goals, shapes, input, bestScore, iterations, Date.now() - t0, unreachable);
 }
 
 const STAT_NAME: Record<StatKey, string> = { c: "Comfort", s: "Stimulation", h: "Health", m: "Mutation", a: "Appeal" };
@@ -487,14 +509,15 @@ function toResult(
   score: number,
   iterations: number,
   ms: number,
+  unreachableNotes?: Record<string, string[]>,
 ): OptimizeResult {
   let houseAppeal = 0;
   const rooms: RoomResult[] = sol.rooms.map((r, i) => {
     const g = goals[i];
     houseAppeal += r.stats.a;
     const stats = { ...r.stats, c: r.stats.c - Math.max(0, g.cats - 4) };
-    const notes: string[] = [];
-    let goalMet = true;
+    const notes: string[] = [...(unreachableNotes?.[g.roomId] ?? [])];
+    let goalMet = notes.length === 0;
     if (g.minComfort !== null && stats.c < g.minComfort) {
       goalMet = false;
       notes.push(`Comfort ${stats.c} is below ${g.minComfort}`);

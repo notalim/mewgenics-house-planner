@@ -35,7 +35,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: "nursery",
-    label: "Feeder nursery: Mutation + Health",
+    label: "Feeder nursery: Health 10, then Mutation",
     hint: "The big room of good-not-great cats. Health 10+ and Mutation 10+ first, then Mutation, with enough Comfort to cover the crowd.",
     primary: "m",
     weights: { m: 1, s: 0.35, h: 0.2, c: 0.15 },
@@ -46,15 +46,26 @@ export const PRESETS: Preset[] = [
     cats: 12,
   },
   {
-    id: "holding",
-    label: "Holding: Health + Comfort",
-    hint: "Adventure squad and retirees. Health 10+ to clear disorders, Comfort above 0 so nobody fights. Appeal pieces live well here.",
-    primary: "h",
-    weights: { h: 0.6, c: 0.4, s: 0.05 },
+    id: "nursery_mut",
+    label: "Feeder nursery: Mutation first",
+    hint: "Same crowd room, but every Mutation piece goes in even when it costs Health. Pick this if new mutations matter more than curing disorders.",
+    primary: "m",
+    weights: { m: 1, s: 0.35, h: 0.1, c: 0.15 },
     target: null,
     minComfort: 1,
     maxComfort: null,
-    mins: { h: 10 },
+    mins: { m: 10 },
+    cats: 12,
+  },
+  {
+    id: "holding",
+    label: "Holding: Health + Comfort",
+    hint: "Adventure squad and retirees. Comfort above 0 so nobody fights, spare Health if the nursery doesn't need it. Appeal pieces live well here.",
+    primary: "h",
+    weights: { h: 0.3, c: 0.4, s: 0.05 },
+    target: null,
+    minComfort: 1,
+    maxComfort: null,
     cats: 4,
   },
   { id: "health", label: "Recovery: Health", hint: "Heals injuries and disorders overnight. 10+ cures disorders.", primary: "h", weights: { h: 1, c: 0.1 }, target: null, minComfort: 1, maxComfort: null, cats: 4 },
@@ -63,6 +74,12 @@ export const PRESETS: Preset[] = [
   { id: "fight", label: "Fight club: Comfort ≤ 0", hint: "At 0 Comfort cats fight between runs and the winner gains a stat. Risky: injuries.", primary: null, weights: { s: 0.05, m: 0.05, h: 0.05 }, target: null, minComfort: null, maxComfort: 0, cats: 4 },
   { id: "appeal", label: "Storage: Appeal only", hint: "Appeal counts from any room, so this mostly wastes a room. Use only for spare space.", primary: "a", weights: {}, target: null, minComfort: null, maxComfort: null, cats: 0 },
 ];
+
+/** Goals saved before a preset changed get the new defaults (keeps the user's cat count). */
+export function migrateGoal(g: RoomGoal): RoomGoal {
+  if (g.preset === "holding" && g.mins?.h === 10 && g.weights.h === 0.6) return goalFromPreset(g.roomId, "holding", g.cats);
+  return g;
+}
 
 export const PRESET_BY_ID = Object.fromEntries(PRESETS.map((p) => [p.id, p]));
 

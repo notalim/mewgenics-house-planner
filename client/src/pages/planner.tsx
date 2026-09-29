@@ -5,7 +5,7 @@ import { FURNITURE_BY_ID, HOUSES, ROOMS, statsOf } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
 import { runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
-import { DEFAULT_ROOM_PRESET, PRESET_BY_ID, goalFromPreset } from "@/lib/presets";
+import { DEFAULT_ROOM_PRESET, PRESET_BY_ID, goalFromPreset, migrateGoal } from "@/lib/presets";
 import { InventoryPanel, type Owned } from "@/components/inventory-panel";
 import { RoomCard } from "@/components/room-card";
 import { Glyph, Logo, StatChips } from "@/components/bits";
@@ -83,7 +83,8 @@ export default function Planner() {
     for (const r of data.inventory) o[r.itemId] = { count: r.count, rare: r.rare };
     setOwned(o);
     if (data.settings.house) setHouse(data.settings.house);
-    if (data.settings.goals) setGoals(data.settings.goals);
+    if (data.settings.goals)
+      setGoals(Object.fromEntries(Object.entries(data.settings.goals).map(([k, g]) => [k, migrateGoal(g)])));
     if (data.settings.prefs) setPrefs(data.settings.prefs);
     warmRef.current = data.settings.layout ?? null;
     setReady(true);
