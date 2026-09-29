@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { IS_STATIC, localApi } from "./local-api";
 
 export const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -14,6 +15,11 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  if (IS_STATIC) {
+    const res = await localApi(method, url, data);
+    await throwIfResNotOk(res);
+    return res;
+  }
   const binary = data instanceof Blob || data instanceof ArrayBuffer;
   const res = await fetch(`${API_BASE}${url}`, {
     method,
@@ -31,7 +37,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`);
+    const res = IS_STATIC ? await localApi("GET", queryKey.join("/")) : await fetch(`${API_BASE}${queryKey.join("/")}`);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

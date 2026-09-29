@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
+import { IS_STATIC, exportPayload } from "@/lib/local-api";
 import { FURNITURE_BY_ID, HIDDEN_ROOMS, HOUSES, ROOMS, statsOf } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
@@ -440,7 +441,17 @@ export default function Planner() {
               owned={owned}
               onSet={setItem}
               placed={placed}
-              exportHref={`${API_BASE}/api/export`}
+              exportHref={IS_STATIC ? undefined : `${API_BASE}/api/export`}
+              onExport={IS_STATIC ? () => {
+                const blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: "application/json" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = "mewgenics-furniture.json";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+              } : undefined}
               onImport={importItems}
               saving={savingInv > 0 || savingSettings}
               focus={focus}
@@ -675,7 +686,7 @@ function Faq() {
       <>
         Yes. Press Import and pick your save, usually{" "}
         <code className="rounded bg-muted px-1 text-xs">%AppData%\\Glaiel Games\\Mewgenics\\&lt;SteamID&gt;\\saves\\steamcampaign01.sav</code> on Windows.
-        The planner reads only the furniture table (every piece, placed or in storage), counts each type and shows a preview before replacing your list. The file is parsed and discarded, nothing from it is kept. Rare pieces are not marked in a way we can read yet, so set those with the Rare stepper afterwards. Console saves cannot be exported, so console players add pieces by hand.
+        The planner reads only the furniture table (every piece, placed or in storage), counts each type and shows a preview before replacing your list. {IS_STATIC ? "It is read right here in your browser with SQLite compiled to WebAssembly and never uploaded." : "The file is parsed and discarded, nothing from it is kept."} Rare pieces are not marked in a way we can read yet, so set those with the Rare stepper afterwards. Console saves cannot be exported, so console players add pieces by hand.
       </>,
     ],
     [
@@ -692,7 +703,9 @@ function Faq() {
     ],
     [
       "Does it sync between my phone and computer?",
-      "Yes. Furniture, room goals, the current layout and saved layouts live on the server behind this link, so any device that opens it sees the same house. Export backup gives you a JSON copy you can re-import.",
+      IS_STATIC
+        ? "This copy runs entirely in your browser (GitHub Pages has no server), so furniture, goals and layouts stay in this browser only. Move them with Export backup and Import. The hosted version at mewgenics-house.pplx.app keeps one shared house for every device that opens it."
+        : "Yes. Furniture, room goals, the current layout and saved layouts live on the server behind this link, so any device that opens it sees the same house. Export backup gives you a JSON copy you can re-import.",
     ],
     [
       "What do the search levels mean?",

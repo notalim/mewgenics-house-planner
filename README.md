@@ -2,7 +2,10 @@
 
 Tell it what furniture you own, pick your house stage and a goal for each room, and it packs everything into the rooms tile by tile, in the order you should place it in game.
 
-Live: https://mewgenics-house.pplx.app
+Use it:
+
+- https://notalim.github.io/mewgenics-house-planner/ (GitHub Pages, runs entirely in your browser; data stays in that browser, move it with Export backup / Import)
+- https://mewgenics-house.pplx.app (hosted with a small server, so the same house shows up on every device that opens the link)
 
 ![Planner, dark theme](docs/desktop-dark.png)
 
@@ -38,7 +41,12 @@ Not a plain greedy fill. One run is:
 
 Pieces whose weighted contribution is negative in every room (a Shrunken Cat Head is -5 Health for +1 Mutation) stay in storage on purpose and are listed with the reason.
 
-## Self hosting
+## Two builds
+
+- `npm run build:static` produces a pure static site (`dist/public`) that keeps inventory and settings in localStorage and reads Steam saves with sql.js (SQLite compiled to WebAssembly). This is what `.github/workflows/pages.yml` deploys to GitHub Pages.
+- `npm run build` produces the same client plus an Express server (`dist/index.cjs`) that stores everything in SQLite, which is how the pplx.app copy syncs between devices.
+
+## Self hosting the server build
 
 Requires Node 20+.
 

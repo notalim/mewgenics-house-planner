@@ -31,6 +31,7 @@ export function InventoryPanel({
   onSet,
   placed,
   exportHref,
+  onExport,
   onImport,
   saving,
   onFocus,
@@ -42,7 +43,8 @@ export function InventoryPanel({
   focus?: string | null;
   onSet: (itemId: string, count: number, rare: number) => void;
   placed: Record<string, { n: number; rooms: string[] }>;
-  exportHref: string;
+  exportHref?: string;
+  onExport?: () => void;
   onImport: (items: Array<{ itemId: string; count: number; rare: number }>) => void;
   saving: boolean;
 }) {
@@ -340,11 +342,17 @@ export function InventoryPanel({
       </div>
 
       <div className="flex items-center gap-2 border-t border-border p-3">
-        <Button variant="outline" size="sm" asChild className="flex-1 gap-1.5" data-testid="button-export">
-          <a href={exportHref} target="_blank" rel="noopener noreferrer">
+        {exportHref ? (
+          <Button variant="outline" size="sm" asChild className="flex-1 gap-1.5" data-testid="button-export">
+            <a href={exportHref} target="_blank" rel="noopener noreferrer">
+              <Download className="h-3.5 w-3.5" /> Export backup
+            </a>
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={onExport} data-testid="button-export">
             <Download className="h-3.5 w-3.5" /> Export backup
-          </a>
-        </Button>
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
