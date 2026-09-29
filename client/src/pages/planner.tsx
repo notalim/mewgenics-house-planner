@@ -594,7 +594,9 @@ function About() {
         </p>
         <p>
           Assumptions to check in game: rare pieces count 2× stats; the ground floor rooms are plain 16×7 rectangles; wall
-          pieces can go anywhere open. Columns count from the left wall, rows from the floor.
+          pieces can go anywhere open; nothing hangs from the attic roof. Pieces with a house-wide job but no room stats
+          (Food Storage Box, +40 max food each) are placed wherever space is left after every stat piece has a spot.
+          Columns count from the left wall, rows from the floor.
         </p>
         <p>
           Data sources:{" "}

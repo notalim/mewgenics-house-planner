@@ -176,7 +176,7 @@ export function InventoryPanel({
                             )}
                           </div>
                           <div className="mt-0.5 flex items-center gap-2">
-                            <StatChips stats={f.stats} mult={addRare ? 2 : 1} size="xs" />
+                            <StatChips stats={f.stats} mult={addRare ? 2 : 1} size="xs" itemId={f.id} />
                             <span className="text-[11px] text-muted-foreground">{tilesLabel(f)}</span>
                           </div>
                         </div>
@@ -252,7 +252,7 @@ export function InventoryPanel({
                       </span>
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <StatChips stats={f.stats} size="xs" />
+                      <StatChips stats={f.stats} size="xs" itemId={f.id} />
                     </div>
                     <div className="mt-1 text-[11px] text-muted-foreground">
                       {tilesLabel(f)} · {KIND_LABEL[f.kind]} ·{" "}

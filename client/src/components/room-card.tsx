@@ -86,6 +86,7 @@ export function RoomCard({
         <p className="mt-1.5 text-[11px] text-muted-foreground">
           Light top edge = stackable surface. Dashed outline = headroom the piece needs (like the spider on Spider TV):
           nothing from the room can be there, but other furniture can sit in it.
+          {def.noHang ? " The attic roof has no bolts, so nothing hangs from it here." : ""}
         </p>
       </div>
 
@@ -520,7 +521,7 @@ function Tooltip({ p, placements, x, y }: { p: Placement; placements: Placement[
         {p.rare && <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--rare))" }} />}
       </div>
       <div className="mt-1.5">
-        <StatChips stats={statsOf(f, p.rare)} size="xs" />
+        <StatChips stats={statsOf(f, p.rare)} size="xs" itemId={f.id} />
       </div>
       <p className="mt-2 text-xs">
         <span className="font-mono">{col}</span>, <span className="font-mono">{row}</span>

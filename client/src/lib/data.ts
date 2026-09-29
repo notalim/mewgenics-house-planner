@@ -37,6 +37,8 @@ export interface RoomDef {
   h: number; // grid height incl. border
   grid: string[]; // y-up rows, 0 free, 1 blocked, 2 surface
   free: number;
+  /** attic: the roof has no bolts, so nothing can hang from it */
+  noHang?: boolean;
 }
 
 export interface HouseDef {
@@ -47,6 +49,12 @@ export interface HouseDef {
 export const FURNITURE = furnitureRaw as Furniture[];
 export const FURNITURE_BY_ID: Record<string, Furniture> = Object.fromEntries(FURNITURE.map((f) => [f.id, f]));
 export const ROOMS = (houseRaw as any).rooms as Record<string, RoomDef>;
+for (const r of Object.values(ROOMS)) r.noHang = /attic/i.test(r.id);
+
+/** Pieces with a house-wide job but no room stats. The planner still finds them a spot. */
+export const UTILITY_NOTE: Record<string, string> = {
+  special_foodbox: "+40 max food (house-wide)",
+};
 export const HOUSES = (houseRaw as any).houses as Record<string, HouseDef>;
 
 export function bodyCells(f: Furniture) {

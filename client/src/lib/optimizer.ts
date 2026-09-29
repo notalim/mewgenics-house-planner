@@ -1,4 +1,8 @@
 import type { Furniture, RoomDef, StatKey } from "./data";
+import { UTILITY_NOTE } from "./data";
+
+/** Score credit for a piece with a house-wide job but no room stats (Food Storage Box): placed when space allows, never over a stat piece. */
+const UTILITY_VALUE = 0.06;
 
 /* ------------------------------------------------------------------ */
 /* Inputs / outputs                                                     */
@@ -113,6 +117,7 @@ interface Shape {
   cost: number;
   bodyCount: number;
   surfCount: number;
+  utility: number;
 }
 
 function buildShape(f: Furniture): Shape {
@@ -135,7 +140,8 @@ function buildShape(f: Furniture): Shape {
   for (const k of Object.keys(base) as StatKey[]) base[k] = f.stats[k] ?? 0;
   // Surfaces create room for stacked pieces, so they are cheaper than solid tiles.
   const cost = Math.max(0.6, bodyCount - 0.5 * surf);
-  return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount, surfCount: surf };
+  const utility = UTILITY_NOTE[f.id] ? UTILITY_VALUE : 0;
+  return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount, surfCount: surf, utility };
 }
 
 /* ------------------------------------------------------------------ */
@@ -166,8 +172,12 @@ class RoomState {
   placed: Placed[];
   stats: Record<StatKey, number>;
   used = 0;
+  /** summed utility credit of placed pieces (see UTILITY_VALUE) */
+  util = 0;
+  noHang: boolean;
 
   constructor(def: RoomDef) {
+    this.noHang = !!def.noHang;
     this.def = def;
     this.W = def.w;
     this.H = def.h;
@@ -210,7 +220,11 @@ class RoomState {
       if (cx < 0 || cy < 0 || cx >= W || cy >= H) return false;
       const idx = cy * W + cx;
       if (this.supUsed[idx]) return false;
-      if (this.base[idx] === 2) continue;
+      if (this.base[idx] === 2) {
+        // a surface above the floor row is ceiling or roof; the attic roof has no bolts to hang from
+        if (cy > 0 && this.noHang) return false;
+        continue;
+      }
       if (this.occ[idx] !== -1 && this.occType[idx] === 2) continue;
       return false;
     }
@@ -309,6 +323,7 @@ class RoomState {
       this.occType[idx] = s.body[i + 2];
     }
     this.used += s.bodyCount;
+    this.util += s.utility;
     this.placed.push({ unit, x, y, host, restsOn });
     const m = unit.rare ? 2 : 1;
     for (const k of STAT_ORDER) this.stats[k] += s.base[k] * m;
@@ -431,7 +446,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     let s = 0;
     let appeal = 0;
     for (let i = 0; i < rooms.length; i++) {
-      s += roomScore(rooms[i].stats, goals[i]);
+      s += roomScore(rooms[i].stats, goals[i]) + rooms[i].util;
       appeal += rooms[i].stats.a;
     }
     // tiny tie-breaker: prefer layouts that leave more empty tiles
@@ -446,7 +461,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     const m = rare ? 2 : 1;
     const st = { ...room.stats };
     for (const k of STAT_ORDER) st[k] += sh.base[k] * m;
-    return roomScore(st, g, FILL_PENALTY) + aW * st.a - before;
+    return roomScore(st, g, FILL_PENALTY) + aW * st.a - before + sh.utility;
   };
 
   /**
@@ -817,7 +832,7 @@ function toResult(
     const [itemId, rare] = k.split("|");
     const sh = shapes[itemId];
     // useful if it would improve any room's score
-    let useful = false;
+    let useful = sh.utility > 0;
     for (let i = 0; i < goals.length; i++) {
       const g = goals[i];
       const st = { ...sol.rooms[i].stats };

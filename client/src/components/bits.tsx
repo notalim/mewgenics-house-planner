@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { STAT_KEYS, STAT_LABEL, STAT_SHORT, type Furniture, type StatKey, dominantStat } from "@/lib/data";
+import { STAT_KEYS, STAT_LABEL, STAT_SHORT, type Furniture, type StatKey, dominantStat, UTILITY_NOTE } from "@/lib/data";
 
 export function Logo({ className }: { className?: string }) {
   return (
@@ -21,14 +21,18 @@ export function StatChips({
   mult = 1,
   className,
   size = "sm",
+  itemId,
 }: {
   stats: Partial<Record<StatKey, number>>;
   mult?: number;
   className?: string;
-  size?: "sm" | "xs";
+  size?: "xs" | "sm";
+  /** item id, used to show a house-wide job for pieces without room stats */
+  itemId?: string;
 }) {
   const entries = STAT_KEYS.filter((k) => (stats[k] ?? 0) !== 0);
-  if (!entries.length) return <span className="text-xs text-muted-foreground">no stats</span>;
+  if (!entries.length)
+    return <span className="text-xs text-muted-foreground">{(itemId && UTILITY_NOTE[itemId]) || "no stats"}</span>;
   return (
     <span className={cn("inline-flex flex-wrap gap-1", className)}>
       {entries.map((k) => {
