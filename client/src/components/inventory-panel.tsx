@@ -20,6 +20,7 @@ import { Download, Minus, Plus, Search, Sparkles, Trash2, Upload } from "lucide-
 import { FURNITURE, FURNITURE_BY_ID, KIND_LABEL, STAT_KEYS, STAT_LABEL, type StatKey } from "@/lib/data";
 import { Glyph, StatChips, tilesLabel } from "./bits";
 import { cn } from "@/lib/utils";
+import { apiRequest } from "@/lib/queryClient";
 
 export type Owned = Record<string, { count: number; rare: number }>;
 
@@ -49,8 +50,16 @@ export function InventoryPanel({
   const [addRare, setAddRare] = useState(false);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<SortKey>("name");
-  const [pendingImport, setPendingImport] = useState<Array<{ itemId: string; count: number; rare: number }> | null>(null);
+  type Pending = {
+    items: Array<{ itemId: string; count: number; rare: number }>;
+    source: "json" | "save";
+    pieces: number;
+    note?: string;
+    skipped?: string[];
+  };
+  const [pendingImport, setPendingImport] = useState<Pending | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [lastAdded, setLastAdded] = useState<string | null>(null);
 
@@ -90,7 +99,7 @@ export function InventoryPanel({
     setLastAdded(id);
   };
 
-  const readFile = (file: File) => {
+  const readJson = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -102,12 +111,47 @@ export function InventoryPanel({
           .map((r: any) => ({ itemId: r.itemId, count: Math.max(0, Number(r.count) || 0), rare: Math.max(0, Number(r.rare) || 0) }));
         if (!items.length) throw new Error("No known furniture in file");
         setImportError(null);
-        setPendingImport(items);
+        setPendingImport({ items, source: "json", pieces: items.reduce((a, i) => a + i.count + i.rare, 0) });
       } catch (e: any) {
         setImportError(e.message ?? "Could not read that file");
       }
     };
     reader.readAsText(file);
+  };
+
+  // Steam save (steamcampaign01.sav): a SQLite file. The server reads its furniture table and sends back counts.
+  const readSave = async (file: File) => {
+    setReading(true);
+    try {
+      const res = await apiRequest("POST", "/api/import/save", file);
+      const data = (await res.json()) as {
+        items: Array<{ itemId: string; count: number; rare: number }>;
+        pieces: number;
+        placed: number;
+        stored: number;
+        plusMerged: number;
+      };
+      const items = data.items.filter((r) => FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop");
+      const skipped = data.items.filter((r) => !FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop").map((r) => `${r.itemId} ×${r.count}`);
+      if (!items.length) throw new Error("No furniture found in that save");
+      const notes = [`${data.placed} placed in rooms, ${data.stored} in storage.`];
+      if (data.plusMerged) notes.push(`${data.plusMerged} merged "+N" pieces (FurnitureUpgrade mod) counted as one normal piece each.`);
+      notes.push("Rare pieces cannot be told apart in the save yet, so mark those with the Rare stepper after importing.");
+      setImportError(null);
+      setPendingImport({ items, source: "save", pieces: items.reduce((a, i) => a + i.count, 0), note: notes.join(" "), skipped });
+    } catch (e: any) {
+      const msg = String(e?.message ?? "Could not read that save file");
+      setImportError(msg.replace(/^\d{3}: /, "").replace(/^\{"message":"(.*)"\}$/, "$1"));
+    } finally {
+      setReading(false);
+    }
+  };
+
+  const readFile = async (file: File) => {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    const isSqlite = new TextDecoder().decode(head.slice(0, 15)) === "SQLite format 3";
+    if (isSqlite || /\.sav$/i.test(file.name)) return readSave(file);
+    return readJson(file);
   };
 
   return (
@@ -306,14 +350,15 @@ export function InventoryPanel({
           size="sm"
           className="flex-1 gap-1.5"
           onClick={() => fileRef.current?.click()}
+          disabled={reading}
           data-testid="button-import"
         >
-          <Upload className="h-3.5 w-3.5" /> Import
+          <Upload className="h-3.5 w-3.5" /> {reading ? "Reading" : "Import"}
         </Button>
         <input
           ref={fileRef}
           type="file"
-          accept="application/json,.json"
+          accept="application/json,.json,.sav"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -329,7 +374,14 @@ export function InventoryPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Replace your furniture list?</AlertDialogTitle>
             <AlertDialogDescription>
-              The file has {pendingImport?.length ?? 0} furniture types. Importing replaces the {totals.types} types saved now.
+              {pendingImport?.source === "save"
+                ? `Your Steam save has ${pendingImport.pieces} pieces of ${pendingImport.items.length} furniture types.`
+                : `The file has ${pendingImport?.items.length ?? 0} furniture types.`}{" "}
+              Importing replaces the {totals.types} types saved now.
+              {pendingImport?.note && <span className="mt-2 block">{pendingImport.note}</span>}
+              {!!pendingImport?.skipped?.length && (
+                <span className="mt-2 block text-xs">Skipped unknown ids: {pendingImport.skipped.slice(0, 6).join(", ")}{pendingImport.skipped.length > 6 ? ` and ${pendingImport.skipped.length - 6} more` : ""}</span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -337,7 +389,7 @@ export function InventoryPanel({
             <AlertDialogAction
               data-testid="button-confirm-import"
               onClick={() => {
-                if (pendingImport) onImport(pendingImport);
+                if (pendingImport) onImport(pendingImport.items);
                 setPendingImport(null);
               }}
             >

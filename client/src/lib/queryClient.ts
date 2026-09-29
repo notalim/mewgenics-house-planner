@@ -14,10 +14,11 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  const binary = data instanceof Blob || data instanceof ArrayBuffer;
   const res = await fetch(`${API_BASE}${url}`, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
+    headers: binary ? { "Content-Type": "application/octet-stream" } : data ? { "Content-Type": "application/json" } : {},
+    body: binary ? (data as Blob | ArrayBuffer) : data ? JSON.stringify(data) : undefined,
   });
 
   await throwIfResNotOk(res);

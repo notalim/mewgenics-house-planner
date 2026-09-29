@@ -55,7 +55,17 @@ for (const r of Object.values(ROOMS)) r.noHang = /attic/i.test(r.id);
 export const UTILITY_NOTE: Record<string, string> = {
   special_foodbox: "+40 max food (house-wide)",
 };
-export const HOUSES = (houseRaw as any).houses as Record<string, HouseDef>;
+/**
+ * Basement0..4 exist in the game's house data with an upgrade chain, but no guide, video or the wiki's
+ * Frank unlock list (attic, room 2, 3, 4: five spaces total) shows them in play, so they stay hidden.
+ */
+export const HIDDEN_ROOMS = /^Basement/;
+export const HOUSES = Object.fromEntries(
+  Object.entries((houseRaw as any).houses as Record<string, HouseDef>).map(([id, h]) => [
+    id,
+    { ...h, rooms: h.rooms.filter((r) => !HIDDEN_ROOMS.test(r)) },
+  ]),
+) as Record<string, HouseDef>;
 
 export function bodyCells(f: Furniture) {
   return f.cells.filter((c) => c[2] === 1 || c[2] === 2).length;

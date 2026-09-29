@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
-import { FURNITURE_BY_ID, HOUSES, ROOMS, statsOf } from "@/lib/data";
+import { FURNITURE_BY_ID, HIDDEN_ROOMS, HOUSES, ROOMS, statsOf } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
 import { EFFORTS, effortFor, runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
@@ -14,7 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, Dices, Loader2, Moon, Sun, Wand2, X } from "lucide-react";
+import { ChevronDown, Dices, Github, ImageDown, Loader2, Moon, Sun, Wand2, X } from "lucide-react";
+import { SnapshotsDialog, type Snapshot } from "@/components/snapshots";
+import { exportHouseImage } from "@/lib/export-image";
+import { useToast } from "@/hooks/use-toast";
+
+export const GITHUB_URL = "https://github.com/notalim/mewgenics-house-planner";
+export const AUTHOR_URL = "https://github.com/notalim";
 import { cn } from "@/lib/utils";
 
 interface HouseSetting {
@@ -27,7 +33,7 @@ interface Prefs {
 }
 interface StateResponse {
   inventory: Array<{ itemId: string; count: number; rare: number }>;
-  settings: { house?: HouseSetting; goals?: Record<string, RoomGoal>; layout?: WarmStart; prefs?: Prefs };
+  settings: { house?: HouseSetting; goals?: Record<string, RoomGoal>; layout?: WarmStart; prefs?: Prefs; snapshots?: Snapshot[] };
 }
 
 const DEFAULT_HOUSE: HouseSetting = { stage: "House2", enabled: ["Floor1_Large", "Floor1_Small", "LargeAttic"] };
@@ -69,6 +75,10 @@ export default function Planner() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [deepRun, setDeepRun] = useState(0);
   const deepPending = useRef(false);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const restoring = useRef(false);
+  const [exporting, setExporting] = useState(false);
+  const { toast } = useToast();
   const [focus, setFocus] = useState<string | null>(null);
   const seed = 1337;
   const warmRef = useRef<WarmStart | null>(null);
@@ -86,10 +96,12 @@ export default function Planner() {
     const o: Owned = {};
     for (const r of data.inventory) o[r.itemId] = { count: r.count, rare: r.rare };
     setOwned(o);
-    if (data.settings.house) setHouse(data.settings.house);
+    if (data.settings.house)
+      setHouse({ ...data.settings.house, enabled: data.settings.house.enabled.filter((r) => !HIDDEN_ROOMS.test(r)) });
     if (data.settings.goals)
       setGoals(Object.fromEntries(Object.entries(data.settings.goals).map(([k, g]) => [k, migrateGoal(g)])));
     if (data.settings.prefs) setPrefs(data.settings.prefs);
+    if (Array.isArray(data.settings.snapshots)) setSnapshots(data.settings.snapshots);
     warmRef.current = data.settings.layout ?? null;
     setReady(true);
   }, [data, ready]);
@@ -97,6 +109,7 @@ export default function Planner() {
   useDebouncedSave("house", house, ready, setSavingSettings);
   useDebouncedSave("goals", goals, ready, setSavingSettings);
   useDebouncedSave("prefs", prefs, ready, setSavingSettings);
+  useDebouncedSave("snapshots", snapshots, ready, setSavingSettings);
 
   const houseDef = HOUSES[house.stage] ?? HOUSES.House2;
   const activeRooms = houseDef.rooms.filter((r) => house.enabled.includes(r));
@@ -169,7 +182,16 @@ export default function Planner() {
   // "Search deeper" runs one exhaustive pass on top of the current layout
   const effort = deepPending.current ? effortFor("max") : effortFor(prefs.effort ?? "normal");
   const req = ready
-    ? { goals: goalList, owned: ownedList, appealWeight: prefs.appealWeight, warm: warmRef.current, effort, seed: seed + deepRun }
+    ? {
+        goals: goalList,
+        owned: ownedList,
+        appealWeight: prefs.appealWeight,
+        warm: warmRef.current,
+        effort,
+        seed: seed + deepRun,
+        // a restored snapshot must come back exactly as saved (still polished, never replaced)
+        stabilityMargin: restoring.current ? Number.POSITIVE_INFINITY : undefined,
+      }
     : null;
   const { result, running } = useOptimizer(req, [
     ready,
@@ -180,8 +202,48 @@ export default function Planner() {
     deepRun,
   ]);
   useEffect(() => {
-    if (!running) deepPending.current = false;
+    if (!running) {
+      deepPending.current = false;
+      restoring.current = false;
+    }
   }, [running]);
+
+  const saveSnapshot = (name: string) => {
+    if (!result) return;
+    const snap: Snapshot = {
+      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      at: new Date().toISOString(),
+      score: result.totalScore,
+      placed: result.rooms.reduce((a, r) => a + r.placements.length, 0),
+      house,
+      goals: Object.fromEntries(activeRooms.map((r) => [r, goalFor(r)])),
+      appealWeight: prefs.appealWeight,
+      layout: toWarm(result),
+    };
+    setSnapshots((prev) => [...prev, snap].slice(-30));
+    toast({ title: "Layout saved", description: `"${name}" is available on every device you open this planner on.` });
+  };
+  const restoreSnapshot = (snap: Snapshot) => {
+    restoring.current = true;
+    warmRef.current = snap.layout;
+    setHouse(snap.house);
+    setGoals((prev) => ({ ...prev, ...snap.goals }));
+    setPrefs((p) => ({ ...p, appealWeight: snap.appealWeight }));
+    setDeepRun((n) => n + 1);
+    toast({ title: "Layout restored", description: `Back to "${snap.name}". Pieces you added since then are fitted around it.` });
+  };
+  const exportImage = async () => {
+    if (!result) return;
+    setExporting(true);
+    try {
+      await exportHouseImage({ result, goals: goalList, ownedCount: ownedList.reduce((a, o) => a + o.count + o.rare, 0) });
+    } catch (e: any) {
+      toast({ title: "Could not export image", description: String(e?.message ?? e), variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // remember the layout so the next recompute starts from it (keeps the house stable)
   useEffect(() => {
@@ -317,6 +379,24 @@ export default function Planner() {
           >
             <Dices className="h-3.5 w-3.5" /> Search deeper
           </Button>
+          <SnapshotsDialog
+            snapshots={snapshots}
+            canSave={!!result && !running}
+            onSave={saveSnapshot}
+            onRestore={restoreSnapshot}
+            onDelete={(id) => setSnapshots((prev) => prev.filter((s) => s.id !== id))}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={!result || running || exporting}
+            onClick={exportImage}
+            title="Download the whole house as one PNG (good for sharing)"
+            data-testid="button-export-image"
+          >
+            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageDown className="h-3.5 w-3.5" />} Export image
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -421,7 +501,20 @@ export default function Planner() {
 
             {result && result.leftovers.length > 0 && <Leftovers leftovers={result.leftovers} />}
 
+            <Faq />
             <About />
+            <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-4 text-[11px] text-muted-foreground" data-testid="footer">
+              <span>
+                Built by{" "}
+                <a className="underline hover:text-foreground" href={AUTHOR_URL} target="_blank" rel="noopener noreferrer">
+                  notalim
+                </a>
+              </span>
+              <a className="inline-flex items-center gap-1 underline hover:text-foreground" href={GITHUB_URL} target="_blank" rel="noopener noreferrer" data-testid="link-github">
+                <Github className="h-3 w-3" /> Source on GitHub
+              </a>
+              <span>Not affiliated with Edmund McMillen, Tyler Glaiel or Mewgenics. Furniture data belongs to the game.</span>
+            </footer>
           </div>
         </main>
       </div>
@@ -534,7 +627,9 @@ function Leftovers({ leftovers }: { leftovers: Array<{ itemId: string; rare: boo
       <h3 className="text-sm font-semibold">Left in storage</h3>
       <p className="text-xs text-muted-foreground">
         {noSpace.length ? `${noSpace.reduce((a, l) => a + l.count, 0)} useful pieces lost out on space. ` : ""}
-        {notUseful.length ? `${notUseful.reduce((a, l) => a + l.count, 0)} pieces don't help any room's goal.` : ""}
+        {notUseful.length
+          ? `${notUseful.reduce((a, l) => a + l.count, 0)} pieces would lower every room's score: what they take away (with your goals' weights) outweighs what they add, so leaving them out beats any spot. Change a room's goal or weights and they get reconsidered.`
+          : ""}
       </p>
       <div className="mt-3 grid gap-4 md:grid-cols-2">
         {[
@@ -564,6 +659,67 @@ function Leftovers({ leftovers }: { leftovers: Array<{ itemId: string; rare: boo
             </div>
           ) : null,
         )}
+      </div>
+    </Card>
+  );
+}
+
+function Faq() {
+  const qa: Array<[string, React.ReactNode]> = [
+    [
+      "How do I use this?",
+      "Add every piece of furniture you own: on PC, Import your Steam save and it reads the list for you; on console, type them in with Add furniture. Pick your house stage and which rooms are unlocked, set each room's goal, then read the grids: numbers are placement order, so build each room from 1 upward and every stacked piece already has its base. Hover a piece anywhere for its name, stats and what it rests on.",
+    ],
+    [
+      "I play on Steam. Can it read my save?",
+      <>
+        Yes. Press Import and pick your save, usually{" "}
+        <code className="rounded bg-muted px-1 text-xs">%AppData%\\Glaiel Games\\Mewgenics\\&lt;SteamID&gt;\\saves\\steamcampaign01.sav</code> on Windows.
+        The planner reads only the furniture table (every piece, placed or in storage), counts each type and shows a preview before replacing your list. The file is parsed and discarded, nothing from it is kept. Rare pieces are not marked in a way we can read yet, so set those with the Rare stepper afterwards. Console saves cannot be exported, so console players add pieces by hand.
+      </>,
+    ],
+    [
+      "Which goals should my rooms have?",
+      "Press Pick strategy for me and it tries every way of splitting roles across your rooms and keeps the best. The usual shape is one elite breeding room (few cats, Stimulation as high as possible, Comfort above 0), one feeder nursery (many cats, Health 10 first) and a holding room for retirees and the adventure squad. Appeal is house-wide, so it does not matter which room it lands in.",
+    ],
+    [
+      "Why is a piece left in storage?",
+      "Two reasons, listed separately at the bottom. No space: it would help, but every layout that fits it scores lower than the one shown. Not useful: with your current goals its negatives outweigh its positives in every room (a Shrunken Cat Head is -5 Health for +1 Mutation, so it only earns a spot in a room that ignores Health). Change the room goal or fine-tune weights and it gets reconsidered.",
+    ],
+    [
+      "Why does the layout change when I add one piece?",
+      "It mostly should not. The previous layout is one of the search's starting points and wins ties, so a new piece is fitted around it. If a genuinely better arrangement appears (more than 0.35 points), the planner takes it and says so in the status line. Save a layout you like from Layouts to get it back at any time.",
+    ],
+    [
+      "Does it sync between my phone and computer?",
+      "Yes. Furniture, room goals, the current layout and saved layouts live on the server behind this link, so any device that opens it sees the same house. Export backup gives you a JSON copy you can re-import.",
+    ],
+    [
+      "What do the search levels mean?",
+      "How many ruin-and-repack rounds run each time something changes. Quick is about a second, Thorough (default) a few seconds, Deep and Exhaustive longer. Search deeper runs one exhaustive pass on top of the current layout. The search is deterministic: same furniture, goals and level give the same result everywhere.",
+    ],
+    [
+      "How many rooms can I have? Where did the basements go?",
+      "Five spaces in the current game: the starting room, the attic (1 retired cat sent to Frank), then rooms 2, 3 and 4 (25, 60 and 100 retired cats). The game's data files also contain five basement rooms with their own upgrade chain, but nothing in play unlocks them yet, so the planner hides them. If they ever ship, they are one flag away.",
+    ],
+    [
+      "The game let me place something the planner refuses (or vice versa).",
+      "Report it with the piece name and a screenshot on GitHub. Known rules built in: headroom tiles (dashed) must be open room space, nothing hangs from the attic roof, rare pieces count double, each cat past four costs one Comfort.",
+    ],
+  ];
+  return (
+    <Card className="p-4" data-testid="card-faq">
+      <h3 className="text-sm font-semibold">FAQ</h3>
+      <div className="mt-2 divide-y divide-border">
+        {qa.map(([q, a]) => (
+          <Collapsible key={q}>
+            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 py-2 text-left text-xs font-medium hover:text-foreground">
+              {q}
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pb-3 text-xs leading-relaxed text-muted-foreground">{a}</CollapsibleContent>
+          </Collapsible>
+        ))}
       </div>
     </Card>
   );
