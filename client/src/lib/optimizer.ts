@@ -88,6 +88,7 @@ interface Shape {
   h: number;
   body: number[]; // flattened [dx,dy,type,...] for types 1,2
   sup: number[]; // flattened [dx,dy,...] required supports
+  clear: number[]; // flattened [dx,dy,...] headroom tiles (type 4): must be open room space, other furniture may overlap
   kind: Furniture["kind"];
   base: Record<StatKey, number>;
   cost: number;
@@ -97,8 +98,10 @@ interface Shape {
 function buildShape(f: Furniture): Shape {
   const body: number[] = [];
   const sup: number[] = [];
+  const clear: number[] = [];
   for (const [x, y, t] of f.cells) {
     if (t === 1 || t === 2) body.push(x, y, t);
+    else if (t === 4) clear.push(x, y);
     else if (t === 3) {
       // "mixed" pieces (e.g. coffin) lean on a wall; only the bottom supports are enforced
       if (f.kind === "mixed" && y !== 0) continue;
@@ -112,7 +115,7 @@ function buildShape(f: Furniture): Shape {
   for (const k of Object.keys(base) as StatKey[]) base[k] = f.stats[k] ?? 0;
   // Surfaces create room for stacked pieces, so they are cheaper than solid tiles.
   const cost = Math.max(0.6, bodyCount - 0.5 * surf);
-  return { id: f.id, w: f.w, h: f.h, body, sup, kind: f.kind, base, cost, bodyCount };
+  return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount };
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,6 +165,15 @@ class RoomState {
       if (cx < 0 || cy < 0 || cx >= W || cy >= H) return false;
       const idx = cy * W + cx;
       if (this.base[idx] !== 0 || this.occ[idx] !== -1) return false;
+    }
+    // headroom (e.g. the spider on Spider TV, couch backs, hanging chains) can't poke into walls,
+    // ceiling or roof, but other furniture may sit in it
+    const cl = s.clear;
+    for (let i = 0; i < cl.length; i += 2) {
+      const cx = x + cl[i];
+      const cy = y + cl[i + 1];
+      if (cx < 0 || cy < 0 || cx >= W || cy >= H) return false;
+      if (this.base[cy * W + cx] !== 0) return false;
     }
     const sp = s.sup;
     for (let i = 0; i < sp.length; i += 2) {

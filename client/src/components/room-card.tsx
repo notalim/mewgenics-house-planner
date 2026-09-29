@@ -61,6 +61,10 @@ export function RoomCard({
 
       <div className={cn("px-4 pb-4 transition-opacity", stale && "opacity-60")}>
         <RoomGrid def={def} result={result} hover={hover} setHover={setHover} />
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Light top edge = stackable surface. Dashed outline = headroom the piece needs (like the spider on Spider TV):
+          nothing from the room can be there, but other furniture can sit in it.
+        </p>
       </div>
 
       {result && result.placements.length > 0 && (
@@ -371,6 +375,22 @@ function RoomGrid({
               style={{ cursor: "default", opacity: dim ? 0.45 : 1, transition: "opacity 120ms" }}
               data-testid={`grid-item-${def.id}-${i}`}
             >
+              {f.cells
+                .filter((c) => c[2] === 4)
+                .map(([dx, dy]) => (
+                  <rect
+                    key={`h${dx}-${dy}`}
+                    x={(p.x + dx) * C + 2}
+                    y={(H - 1 - (p.y + dy)) * C + 2}
+                    width={C - 4}
+                    height={C - 4}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={1.2}
+                    strokeDasharray="3 2"
+                    opacity={0.85}
+                  />
+                ))}
               {body.map(([dx, dy, t]) => (
                 <rect
                   key={`${dx}-${dy}`}

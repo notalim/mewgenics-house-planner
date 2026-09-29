@@ -86,6 +86,8 @@ export function Glyph({ f, cell = 5, className }: { f: Furniture; cell?: number;
             );
           if (t === 3)
             return <rect key={i} x={px + s * 0.3} y={py + s * 0.3} width={s * 0.4} height={s * 0.4} fill="currentColor" opacity={0.35} />;
+          if (t === 4)
+            return <rect key={i} x={px + 0.6} y={py + 0.6} width={s - 1.2} height={s - 1.2} fill="none" stroke={color} strokeWidth={0.6} strokeDasharray="1 0.8" opacity={0.8} />;
           return null;
         })}
       </g>
@@ -96,5 +98,6 @@ export function Glyph({ f, cell = 5, className }: { f: Furniture; cell?: number;
 export function tilesLabel(f: Furniture) {
   const body = f.cells.filter((c) => c[2] === 1 || c[2] === 2).length;
   const surf = f.cells.filter((c) => c[2] === 2).length;
-  return `${body} tile${body === 1 ? "" : "s"}${surf ? `, ${surf} stackable` : ""}`;
+  const head = f.cells.filter((c) => c[2] === 4).length;
+  return `${body} tile${body === 1 ? "" : "s"}${surf ? `, ${surf} stackable` : ""}${head ? `, +${head} headroom` : ""}`;
 }
