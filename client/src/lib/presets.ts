@@ -71,7 +71,17 @@ export const PRESETS: Preset[] = [
   { id: "health", label: "Recovery: Health", hint: "Heals injuries and disorders overnight. 10+ cures disorders.", primary: "h", weights: { h: 1, c: 0.1 }, target: null, minComfort: 1, maxComfort: null, cats: 4 },
   { id: "mutation", label: "Lab: Mutation", hint: "Only Mutation above 10 rolls full mutations. It no longer removes birth defects (v1.1).", primary: "m", weights: { m: 1, c: 0.1 }, target: null, minComfort: 1, maxComfort: null, cats: 4 },
   { id: "comfort", label: "Comfort: breed often", hint: "More overnight breeding, fewer fights.", primary: "c", weights: { c: 1 }, target: null, minComfort: null, maxComfort: null, cats: 4 },
-  { id: "fight", label: "Fight club: Comfort ≤ 0", hint: "At 0 Comfort cats fight between runs and the winner gains a stat. Risky: injuries.", primary: null, weights: { s: 0.05, m: 0.05, h: 0.05 }, target: null, minComfort: null, maxComfort: 0, cats: 4 },
+  {
+    id: "fight",
+    label: "Fight club: Comfort ≤ 0, Health",
+    hint: "No Comfort so cats fight between runs; the winner gains a random stat, the only way past base 7 besides mutations. Health here heals the loser's injuries overnight. Keep the cats you are not adventuring with in it.",
+    primary: "h",
+    weights: { h: 0.6, s: 0.05, m: 0.05 },
+    target: null,
+    minComfort: null,
+    maxComfort: 0,
+    cats: 4,
+  },
   { id: "appeal", label: "Storage: Appeal only", hint: "Appeal counts from any room, so this mostly wastes a room. Use only for spare space.", primary: "a", weights: {}, target: null, minComfort: null, maxComfort: null, cats: 0 },
 ];
 
