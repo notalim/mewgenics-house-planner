@@ -1,5 +1,5 @@
 import type { Furniture, RoomDef, StatKey } from "./data";
-import { UTILITY_NOTE } from "./data";
+import { UTILITY_NOTE, allowedInRoom } from "./data";
 
 /** Score credit for a piece with a house-wide job but no room stats (Food Storage Box): placed when space allows, never over a stat piece. */
 const UTILITY_VALUE = 0.06;
@@ -455,8 +455,13 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     return s + aW * appeal - used * 0.0005;
   };
 
+  // room def -> preset, so replay() can refuse idols that do not belong in that room's role
+  const presetOfDef = new Map<RoomDef, string>(goals.map((g) => [input.rooms[g.roomId], g.preset]));
+  const okIn = (def: RoomDef, itemId: string) => allowedInRoom(itemId, presetOfDef.get(def) ?? "");
+
   const marginal = (room: RoomState, gi: number, sh: Shape, rare: boolean) => {
     const g = goals[gi];
+    if (!allowedInRoom(sh.id, g.preset)) return -1e9;
     const before = roomScore(room.stats, g, FILL_PENALTY) + aW * room.stats.a;
     const m = rare ? 2 : 1;
     const st = { ...room.stats };
@@ -552,6 +557,10 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     const r = new RoomState(def);
     for (const u of canonical(order, rnd, jitter)) {
       const sh = shapes[u.itemId];
+      if (!okIn(def, u.itemId)) {
+        pushPool(pool, u);
+        continue;
+      }
       const spot = r.findSpot(sh, rnd, spread);
       if (spot) r.place(sh, u, spot[0], spot[1]);
       else pushPool(pool, u);
@@ -832,9 +841,11 @@ function toResult(
     const [itemId, rare] = k.split("|");
     const sh = shapes[itemId];
     // useful if it would improve any room's score
-    let useful = sh.utility > 0;
+    let useful = false;
     for (let i = 0; i < goals.length; i++) {
       const g = goals[i];
+      if (!allowedInRoom(itemId, g.preset)) continue;
+      if (sh.utility > 0) useful = true;
       const st = { ...sol.rooms[i].stats };
       const m = rare === "1" ? 2 : 1;
       const before = roomScore(st, g, FILL_PENALTY) + input.appealWeight * st.a;

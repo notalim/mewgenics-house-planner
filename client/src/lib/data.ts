@@ -54,6 +54,21 @@ for (const r of Object.values(ROOMS)) r.noHang = /attic/i.test(r.id);
 /** Pieces with a house-wide job but no room stats. The planner still finds them a spot. */
 export const UTILITY_NOTE: Record<string, string> = {
   special_foodbox: "+40 max food (house-wide)",
+  special_suppressoridol: "stops breeding and fights in its room, so it only goes in holding-type rooms",
+  special_fightidol: "doubles fight rewards and raises fight risk, so it only goes in a Fight club room",
+};
+
+/**
+ * Idols whose effect is not in their stats. The optimizer places them only in rooms whose goal wants that
+ * effect: the Idol of Chastity would silently stop a breeding room, the Idol of Chaos makes a normal room fight.
+ */
+export const ROOM_RESTRICTION: Record<string, (presetId: string) => boolean> = {
+  special_suppressoridol: (p) => ["holding", "health", "comfort", "appeal"].includes(p),
+  special_fightidol: (p) => p === "fight",
+};
+export const allowedInRoom = (itemId: string, presetId: string) => {
+  const r = ROOM_RESTRICTION[itemId];
+  return r ? r(presetId) : true;
 };
 /**
  * Basement0..4 exist in the game's house data with an upgrade chain, but no guide, video or the wiki's
