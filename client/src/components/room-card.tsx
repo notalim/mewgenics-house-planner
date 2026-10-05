@@ -238,8 +238,9 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
             ))}
           </div>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Score = sum of weight × stat, minus a penalty for every point a floor is missed. Health 10+ cures disorders;
-            Mutation above 10 rolls full mutations. Appeal is house-wide and set in the top bar.
+            Score = sum of weight × stat. A Min is a hard floor: no single piece is worth breaking it, so the room only
+            ends up below it when your pieces cannot reach it at all (see the budget line at the top). Health 10+ cures
+            disorders; Mutation above 10 rolls full mutations. Appeal is house-wide and set in the top bar.
           </p>
         </CollapsibleContent>
       </Collapsible>

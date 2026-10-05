@@ -11,7 +11,7 @@ export interface Preset {
   minComfort: number | null;
   maxComfort: number | null;
   mins?: Partial<Record<StatKey, number>>;
-  /** how hard the floors in `mins` are: 0.6 (default) bends when a piece is worth it, 4 is effectively a wall */
+  /** how hard the floors in `mins` are; default 4 is effectively a wall, lower values bend when a piece is worth it */
   minsWeight?: number;
   cats: number;
 }

@@ -17,7 +17,7 @@ export interface RoomGoal {
   maxComfort: number | null;
   /** floors for other stats, e.g. Health 10 (cures disorders) or Mutation 10 (full mutations) */
   mins?: Partial<Record<StatKey, number>>;
-  /** penalty multiplier for `mins` (0.6 default; 4 makes the floor effectively hard) */
+  /** penalty multiplier for `mins`; the default 4 makes a floor effectively hard (no single piece is worth breaking it) */
   minsWeight?: number;
   cats: number;
 }
@@ -372,7 +372,7 @@ function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENA
     for (const k of STAT_ORDER) {
       const m = g.mins[k];
       if (m === undefined || m === null || k === "c" || k === "a") continue;
-      if (stats[k] < m) sc -= P * (g.minsWeight ?? 0.6) * (m - stats[k]);
+      if (stats[k] < m) sc -= P * (g.minsWeight ?? 4) * (m - stats[k]);
     }
   return sc;
 }
