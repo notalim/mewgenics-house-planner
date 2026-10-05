@@ -94,6 +94,8 @@ export function migrateGoal(g: RoomGoal): RoomGoal {
   if (g.preset === "holding" && g.mins?.h === 10 && g.weights.h === 0.6) return goalFromPreset(g.roomId, "holding", g.cats);
   // breeding rooms saved before the Health 0 floor existed pick it up
   if (g.preset === "breeding" && (g.mins?.h === undefined || g.minsWeight === undefined) && g.weights.s === 1 && g.weights.c === 0.15) return goalFromPreset(g.roomId, "breeding", g.cats);
+  // a breeding room never runs negative Health, whatever else was tuned on it
+  if (g.preset === "breeding" && (g.mins?.h === undefined || g.mins.h < 0)) return { ...g, mins: { ...(g.mins ?? {}), h: 0 } };
   return g;
 }
 
