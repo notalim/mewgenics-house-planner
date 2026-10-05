@@ -17,6 +17,8 @@ export interface RoomGoal {
   maxComfort: number | null;
   /** floors for other stats, e.g. Health 10 (cures disorders) or Mutation 10 (full mutations) */
   mins?: Partial<Record<StatKey, number>>;
+  /** penalty multiplier for `mins` (0.6 default; 4 makes the floor effectively hard) */
+  minsWeight?: number;
   cats: number;
 }
 
@@ -89,6 +91,8 @@ export interface OptimizeResult {
   partial?: boolean;
   /** which start won: 0 = previous layout, 1+ = fresh chains */
   chain: number;
+  /** per stat: positive points across every piece you own, and what the room floors add up to */
+  budget?: Record<StatKey, { owned: number; floors: number }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -368,7 +372,7 @@ function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENA
     for (const k of STAT_ORDER) {
       const m = g.mins[k];
       if (m === undefined || m === null || k === "c" || k === "a") continue;
-      if (stats[k] < m) sc -= P * 0.6 * (m - stats[k]);
+      if (stats[k] < m) sc -= P * (g.minsWeight ?? 0.6) * (m - stats[k]);
     }
   return sc;
 }
@@ -400,6 +404,13 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     for (const k of STAT_ORDER) reach[k] += Math.max(0, f.stats[k] ?? 0) * n;
   }
   const unreachable: Record<string, string[]> = {};
+  // house-wide budget: floors across rooms versus the positive points you own
+  const budget = {} as Record<StatKey, { owned: number; floors: number }>;
+  for (const k of STAT_ORDER) budget[k] = { owned: reach[k], floors: 0 };
+  for (const g of input.goals) {
+    if (!input.rooms[g.roomId] || !g.mins) continue;
+    for (const [k, v] of Object.entries(g.mins) as Array<[StatKey, number]>) if (v) budget[k].floors += v;
+  }
   const goals = input.goals
     .filter((g) => input.rooms[g.roomId])
     .map((g) => {
@@ -726,7 +737,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   const progressEvery = input.progressEvery ?? 250;
   const report = () => {
     if (!input.onProgress) return;
-    input.onProgress(toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain, true));
+    input.onProgress(toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain, true, budget));
   };
 
   let warmChain: { sol: Solution; score: number } | null = null;
@@ -945,7 +956,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   }
   globalBestScore = totalScore(globalBest.rooms);
 
-  return toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain);
+  return toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain, false, budget);
 }
 
 function toResult(
@@ -960,6 +971,7 @@ function toResult(
   unreachableNotes: Record<string, string[]>,
   chain: number,
   partial = false,
+  budget?: Record<StatKey, { owned: number; floors: number }>,
 ): OptimizeResult {
   let houseAppeal = 0;
   const rooms: RoomResult[] = sol.rooms.map((r, i) => {
@@ -1031,7 +1043,7 @@ function toResult(
     leftovers.push({ itemId, rare: rare === "1", count: units.length, reason: useful ? "no-space" : "not-useful" });
   });
   leftovers.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === "no-space" ? -1 : 1));
-  return { rooms, houseAppeal, leftovers, totalScore: score, iterations, effort, ms, partial, chain };
+  return { rooms, houseAppeal, leftovers, totalScore: score, iterations, effort, ms, partial, chain, budget };
 }
 
 export function toWarm(res: OptimizeResult): WarmStart {

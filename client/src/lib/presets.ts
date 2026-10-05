@@ -11,6 +11,8 @@ export interface Preset {
   minComfort: number | null;
   maxComfort: number | null;
   mins?: Partial<Record<StatKey, number>>;
+  /** how hard the floors in `mins` are: 0.6 (default) bends when a piece is worth it, 4 is effectively a wall */
+  minsWeight?: number;
   cats: number;
 }
 
@@ -32,6 +34,7 @@ export const PRESETS: Preset[] = [
     minComfort: 2,
     maxComfort: null,
     mins: { h: 0 },
+    minsWeight: 4,
     cats: 4,
   },
   {
@@ -90,7 +93,7 @@ export const PRESETS: Preset[] = [
 export function migrateGoal(g: RoomGoal): RoomGoal {
   if (g.preset === "holding" && g.mins?.h === 10 && g.weights.h === 0.6) return goalFromPreset(g.roomId, "holding", g.cats);
   // breeding rooms saved before the Health 0 floor existed pick it up
-  if (g.preset === "breeding" && g.mins?.h === undefined && g.weights.s === 1 && g.weights.c === 0.15) return goalFromPreset(g.roomId, "breeding", g.cats);
+  if (g.preset === "breeding" && (g.mins?.h === undefined || g.minsWeight === undefined) && g.weights.s === 1 && g.weights.c === 0.15) return goalFromPreset(g.roomId, "breeding", g.cats);
   return g;
 }
 
@@ -106,6 +109,7 @@ export function goalFromPreset(roomId: string, presetId: string, cats?: number):
     minComfort: p.minComfort,
     maxComfort: p.maxComfort,
     mins: p.mins ? { ...p.mins } : undefined,
+    minsWeight: p.minsWeight,
     cats: cats ?? p.cats,
   };
 }

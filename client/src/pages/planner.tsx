@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
 import { IS_STATIC, exportPayload } from "@/lib/local-api";
-import { FURNITURE_BY_ID, HIDDEN_ROOMS, HOUSES, ROOMS, statsOf } from "@/lib/data";
+import { FURNITURE_BY_ID, HIDDEN_ROOMS, HOUSES, ROOMS, STAT_LABEL, statsOf, type StatKey } from "@/lib/data";
 import type { RoomGoal, WarmStart } from "@/lib/optimizer";
 import { toWarm } from "@/lib/optimizer";
 import { EFFORTS, effortFor, runAutoStrategy, useOptimizer } from "@/lib/use-optimizer";
@@ -500,6 +500,7 @@ export default function Planner() {
               appeal={result?.houseAppeal ?? 0}
               placedCount={(result?.rooms ?? []).reduce((a, r) => a + r.placements.length, 0)}
               ownedCount={ownedList.reduce((a, o) => a + o.count + o.rare, 0)}
+              budget={result?.budget}
             />
 
             {auto.info && <StrategyCard info={auto.info} onClose={() => setAuto({ running: false, info: null })} />}
@@ -607,6 +608,7 @@ function SummaryBar({
   appeal,
   placedCount,
   ownedCount,
+  budget,
 }: {
   running: boolean;
   iterations: number;
@@ -617,8 +619,13 @@ function SummaryBar({
   appeal: number;
   placedCount: number;
   ownedCount: number;
+  budget?: Record<StatKey, { owned: number; floors: number }>;
 }) {
   const pct = running ? Math.min(100, Math.round((iterations / Math.max(1, effort)) * 100)) : 100;
+  // floors that eat most of a stat you barely own are the usual reason a room ends up short
+  const tight = budget
+    ? (Object.entries(budget) as Array<[StatKey, { owned: number; floors: number }]>).filter(([, b]) => b.floors > 0 && b.floors >= 0.6 * b.owned)
+    : [];
   return (
     <div className="space-y-1.5" data-testid="status-optimizer">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
@@ -652,6 +659,17 @@ function SummaryBar({
           style={{ width: `${pct}%`, opacity: running ? 1 : 0.35 }}
         />
       </div>
+      {tight.length > 0 && (
+        <p className="text-[11px] text-muted-foreground" data-testid="text-budget">
+          {tight.map(([k, b]) => (
+            <span key={k} className="mr-3">
+              {STAT_LABEL[k]} budget: your pieces add up to <span className="font-mono text-foreground">+{b.owned}</span>, room floors ask for{" "}
+              <span className="font-mono text-foreground">{b.floors}</span>
+              {b.floors > b.owned ? ", which cannot all be met; lower a floor or buy more" : `, so the other rooms share ${b.owned - b.floors}`}.
+            </span>
+          ))}
+        </p>
+      )}
     </div>
   );
 }
