@@ -916,7 +916,9 @@ export function optimize(input: OptimizeInput): OptimizeResult {
         for (const p of W.placed) if (!dCells.has(cellKey(p))) moved++;
         return { ri, gain: roomVal(D, goals[ri]) - roomVal(W, goals[ri]), moved };
       })
-      .filter((c) => c.moved > 0 && c.gain > margin + perMove * c.moved)
+      // rooms that do not pay for themselves stay in the list: taking them alongside a room that does is sometimes
+      // the only feasible combination (the full searched layout always is)
+      .filter((c) => c.moved > 0)
       .sort((a, b) => b.gain - a.gain);
     const ownedCount = new Map<string, number>();
     for (const u of allUnits) ownedCount.set(poolKey(u.itemId, u.rare), (ownedCount.get(poolKey(u.itemId, u.rare)) ?? 0) + 1);
@@ -925,16 +927,33 @@ export function optimize(input: OptimizeInput): OptimizeResult {
       for (const r of rooms) for (const p of r.placed) m.set(poolKey(p.unit.itemId, p.unit.rare), (m.get(poolKey(p.unit.itemId, p.unit.rare)) ?? 0) + 1);
       return m;
     };
-    for (const c of cands) {
-      const trial = chosen.slice();
-      trial[c.ri] = globalBest.rooms[c.ri];
-      const d = demand(trial);
-      let feasible = true;
+    // rooms are not independent (a piece the searched attic uses may sit in the kept nursery), so pick the subset of
+    // candidate rooms with the best total payoff whose combined demand you actually own. Five rooms at most, so
+    // every subset is cheap to try.
+    const feasible = (rooms: RoomState[]) => {
+      const d = demand(rooms);
+      let ok = true;
       d.forEach((n, k) => {
-        if (n > (ownedCount.get(k) ?? 0)) feasible = false;
+        if (n > (ownedCount.get(k) ?? 0)) ok = false;
       });
-      if (feasible) chosen[c.ri] = globalBest.rooms[c.ri];
+      return ok;
+    };
+    let bestPayoff = 0;
+    let bestMask = 0;
+    for (let mask = 1; mask < 1 << cands.length; mask++) {
+      let payoff = 0;
+      const trial = chosen.slice();
+      for (let i = 0; i < cands.length; i++)
+        if (mask & (1 << i)) {
+          payoff += cands[i].gain - margin - perMove * cands[i].moved;
+          trial[cands[i].ri] = globalBest.rooms[cands[i].ri];
+        }
+      if (payoff > bestPayoff && feasible(trial)) {
+        bestPayoff = payoff;
+        bestMask = mask;
+      }
     }
+    for (let i = 0; i < cands.length; i++) if (bestMask & (1 << i)) chosen[cands[i].ri] = globalBest.rooms[cands[i].ri];
     // rebuild the pool from whatever the chosen rooms do not use
     const used = demand(chosen);
     const pool = new Map<string, Unit[]>();
