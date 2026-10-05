@@ -307,16 +307,22 @@ function StatStrip({
   );
 }
 
-function placementLabel(p: Placement, placements: Placement[]) {
-  const f = FURNITURE_BY_ID[p.itemId];
-  const xs = f.cells.filter((c) => c[2] === 1 || c[2] === 2).map((c) => c[0] + p.x);
-  const ys = f.cells.filter((c) => c[2] === 1 || c[2] === 2).map((c) => c[1] + p.y);
+/** "col 3, rows 0–2" for a piece at grid cell (x, y); the same wording the step list and tooltips use */
+export function cellLabel(itemId: string, x: number, y: number) {
+  const f = FURNITURE_BY_ID[itemId];
+  const xs = f.cells.filter((c) => c[2] === 1 || c[2] === 2).map((c) => c[0] + x);
+  const ys = f.cells.filter((c) => c[2] === 1 || c[2] === 2).map((c) => c[1] + y);
   const x0 = Math.min(...xs);
   const x1 = Math.max(...xs);
   const y0 = Math.min(...ys);
   const y1 = Math.max(...ys);
   const col = x0 === x1 ? `col ${x0}` : `cols ${x0}–${x1}`;
   const row = y0 === y1 ? `row ${y0}` : `rows ${y0}–${y1}`;
+  return `${col}, ${row}`;
+}
+
+function placementLabel(p: Placement, placements: Placement[]) {
+  const [col, row] = cellLabel(p.itemId, p.x, p.y).split(", ");
   let rests = "";
   if (p.restsOn === "floor") rests = "on the floor";
   else if (p.restsOn === "ceiling") rests = "hung from the ceiling";

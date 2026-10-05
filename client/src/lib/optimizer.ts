@@ -33,6 +33,8 @@ export interface OptimizeInput {
   owned: OwnedItem[];
   appealWeight: number;
   warm?: WarmStart | null;
+  /** score a drifted room must gain per piece the player would have to move before it replaces the kept cells */
+  movePenalty?: number;
   /**
    * Search effort in LNS iterations. Deterministic: the same inventory, goals, effort and seed always
    * give the same layout, whatever device runs it. ~600 iterations per second on a laptop.
@@ -51,8 +53,8 @@ export interface OptimizeInput {
   timeBudgetMs?: number;
 }
 
-/** A warm start is just the placement order per room: [itemId, rare][] */
-export type WarmStart = Record<string, Array<[string, boolean]>>;
+/** A warm start is the placement order per room, with the exact cell when known: [itemId, rare, x?, y?][] */
+export type WarmStart = Record<string, Array<[string, boolean] | [string, boolean, number, number]>>;
 
 export interface Placement {
   itemId: string;
@@ -552,6 +554,92 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     return keyed.map((x) => x.u);
   };
 
+  /** Same room with the given placements dropped; everything else keeps its exact cell. null if something resting on a dropped piece is lost. */
+  const withoutPieces = (room: RoomState, drop: Set<number>): RoomState | null => {
+    const r = new RoomState(room.def);
+    for (let i = 0; i < room.placed.length; i++) {
+      if (drop.has(i)) continue;
+      const p = room.placed[i];
+      const sh = shapes[p.unit.itemId];
+      if (!r.canPlace(sh, p.x, p.y)) return null;
+      r.place(sh, p.unit, p.x, p.y);
+    }
+    return r;
+  };
+
+  /**
+   * The greedy pass leaves single stranded cells next to small pieces. For every leftover that would help this
+   * room but no longer fits, try lifting one or two small placed pieces, dropping the leftover in, and putting the
+   * small pieces back anywhere they fit. Accept the first arrangement that keeps everything and adds the leftover.
+   */
+  const defragRoom = (sol: Solution, ri: number): boolean => {
+    const room = sol.rooms[ri];
+    const g = goals[ri];
+    const wants: Array<{ k: string; gain: number }> = [];
+    sol.pool.forEach((units, k) => {
+      if (!units.length) return;
+      const u = units[0];
+      const sh = shapes[u.itemId];
+      if (!allowedInRoom(u.itemId, g.preset)) return;
+      if (room.used + sh.bodyCount > room.def.free) return;
+      const gain = marginal(room, ri, sh, u.rare);
+      if (gain > 1e-9) wants.push({ k, gain });
+    });
+    if (!wants.length) return false;
+    wants.sort((a, b) => b.gain - a.gain);
+    const small: number[] = [];
+    room.placed.forEach((p, i) => {
+      if (shapes[p.unit.itemId].bodyCount <= 2) small.push(i);
+    });
+    const near = (a: number, b: number) => {
+      const pa = room.placed[a];
+      const pb = room.placed[b];
+      return Math.abs(pa.x - pb.x) <= 4 && Math.abs(pa.y - pb.y) <= 4;
+    };
+    const combos: number[][] = small.map((i) => [i]);
+    for (let a = 0; a < small.length; a++) for (let b = a + 1; b < small.length; b++) if (near(small[a], small[b])) combos.push([small[a], small[b]]);
+    let changed = false;
+    for (const w of wants) {
+      const units = sol.pool.get(w.k)!;
+      if (!units.length) continue;
+      const u = units[0];
+      const sh = shapes[u.itemId];
+      const cur = sol.rooms[ri];
+      if (cur.findSpot(sh)) continue; // plain fill will take it
+      let done = false;
+      for (const combo of combos) {
+        if (combo.some((i) => i >= cur.placed.length)) continue;
+        const r2 = withoutPieces(cur, new Set(combo));
+        if (!r2) continue;
+        const spot = r2.findSpot(sh);
+        if (!spot) continue;
+        r2.place(sh, u, spot[0], spot[1]);
+        let ok = true;
+        for (const i of combo) {
+          const p = cur.placed[i];
+          const psh = shapes[p.unit.itemId];
+          const sp2 = r2.findSpot(psh);
+          if (!sp2) {
+            ok = false;
+            break;
+          }
+          r2.place(psh, p.unit, sp2[0], sp2[1]);
+        }
+        if (!ok) continue;
+        units.shift();
+        sol.rooms[ri] = r2;
+        done = true;
+        break;
+      }
+      if (done) {
+        changed = true;
+        // placed indices shifted; rebuild the small list for the next want
+        return defragRoom(sol, ri) || true;
+      }
+    }
+    return changed;
+  };
+
   /** Rebuild a room from an order of units; units that no longer fit go back to the pool. */
   const replay = (def: RoomDef, order: Unit[], pool: Map<string, Unit[]>, rnd?: () => number, spread = 0, jitter = 0) => {
     const r = new RoomState(def);
@@ -574,19 +662,42 @@ export function optimize(input: OptimizeInput): OptimizeResult {
 
   /* ---------------- starting points ---------------- */
   const starts: Array<{ sol: Solution; label: number }> = [];
+  /** the previous layout with new pieces fitted around it, untouched by the search; see "keep cells" below */
+  let warmExact: Solution | null = null;
   if (input.warm) {
     const pool = makePool(allUnits);
     const rooms = goals.map((g) => {
       const order: Unit[] = [];
-      for (const [itemId, rare] of input.warm![g.roomId] ?? []) {
-        const list = pool.get(poolKey(itemId, rare));
+      const def = input.rooms[g.roomId];
+      const entries = input.warm![g.roomId] ?? [];
+      const exact = entries.length > 0 && entries.every((e) => e.length === 4);
+      for (const e of entries) {
+        const list = pool.get(poolKey(e[0], e[1]));
         if (list && list.length) order.push(list.shift()!);
       }
-      return replay(input.rooms[g.roomId], order, pool);
+      if (!exact) return replay(def, order, pool);
+      // exact cells known: rebuild the room as it was, so unchanged pieces do not drift
+      const r = new RoomState(def);
+      const spill: Unit[] = [];
+      entries.forEach((e, i) => {
+        const u = order[i];
+        if (!u) return;
+        const sh = shapes[u.itemId];
+        if (okIn(def, u.itemId) && r.canPlace(sh, e[2] as number, e[3] as number)) r.place(sh, u, e[2] as number, e[3] as number);
+        else spill.push(u);
+      });
+      for (const u of canonical(spill)) {
+        const sh = shapes[u.itemId];
+        const spot = okIn(def, u.itemId) ? r.findSpot(sh) : null;
+        if (spot) r.place(sh, u, spot[0], spot[1]);
+        else pushPool(pool, u);
+      }
+      return r;
     });
     const warm: Solution = { rooms, pool };
     fill(warm, allIdx, 0, mulberry32(seed), 0);
     starts.push({ sol: warm, label: 0 });
+    warmExact = { rooms: warm.rooms.map((r) => withoutPieces(r, new Set())!), pool: clonePool(warm.pool) };
   }
   const nFresh = effort >= 1500 ? 3 : effort >= 400 ? 2 : 1;
   for (let c = 0; c < nFresh; c++) {
@@ -767,6 +878,71 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   // ---- final polish: deterministic greedy pass, then squeeze in anything left
   const polishRnd = mulberry32(seed + 5);
   fill(globalBest, allIdx, 0, polishRnd, 0, 60, 12);
+  // ---- defrag: move small pieces out of the way so stranded gaps merge and a leftover fits
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const ri of allIdx) if (defragRoom(globalBest, ri)) moved = true;
+    if (!moved) break;
+    fill(globalBest, allIdx, 0, polishRnd, 0, 20, 4);
+  }
+  // ---- keep cells: the search above moves pieces freely, but every moved piece is work in the game. Start from
+  // the previous layout (new pieces fitted around it) and take a room from the searched layout only when its gain
+  // pays for every piece the player would have to add, move or remove in that room.
+  if (warmExact) {
+    const perMove = input.movePenalty ?? 0.05;
+    const margin = input.stabilityMargin ?? 0.35;
+    const chosen = warmExact.rooms.slice();
+    const roomVal = (r: RoomState, g: RoomGoal) => roomScore(r.stats, g) + aW * r.stats.a + r.util;
+    const cellKey = (p: Placed) => `${p.unit.itemId}|${p.unit.rare ? 1 : 0}|${p.x}|${p.y}`;
+    const cands = allIdx
+      .map((ri) => {
+        const W = warmExact!.rooms[ri];
+        const D = globalBest.rooms[ri];
+        const wCells = new Set(W.placed.map(cellKey));
+        const dCells = new Set(D.placed.map(cellKey));
+        let moved = 0;
+        for (const p of D.placed) if (!wCells.has(cellKey(p))) moved++;
+        for (const p of W.placed) if (!dCells.has(cellKey(p))) moved++;
+        return { ri, gain: roomVal(D, goals[ri]) - roomVal(W, goals[ri]), moved };
+      })
+      .filter((c) => c.moved > 0 && c.gain > margin + perMove * c.moved)
+      .sort((a, b) => b.gain - a.gain);
+    const ownedCount = new Map<string, number>();
+    for (const u of allUnits) ownedCount.set(poolKey(u.itemId, u.rare), (ownedCount.get(poolKey(u.itemId, u.rare)) ?? 0) + 1);
+    const demand = (rooms: RoomState[]) => {
+      const m = new Map<string, number>();
+      for (const r of rooms) for (const p of r.placed) m.set(poolKey(p.unit.itemId, p.unit.rare), (m.get(poolKey(p.unit.itemId, p.unit.rare)) ?? 0) + 1);
+      return m;
+    };
+    for (const c of cands) {
+      const trial = chosen.slice();
+      trial[c.ri] = globalBest.rooms[c.ri];
+      const d = demand(trial);
+      let feasible = true;
+      d.forEach((n, k) => {
+        if (n > (ownedCount.get(k) ?? 0)) feasible = false;
+      });
+      if (feasible) chosen[c.ri] = globalBest.rooms[c.ri];
+    }
+    // rebuild the pool from whatever the chosen rooms do not use
+    const used = demand(chosen);
+    const pool = new Map<string, Unit[]>();
+    for (const u of allUnits) {
+      const k = poolKey(u.itemId, u.rare);
+      const n = used.get(k) ?? 0;
+      if (n > 0) used.set(k, n - 1);
+      else pushPool(pool, u);
+    }
+    globalBest = { rooms: chosen, pool };
+    if (chosen.some((r, i) => r === warmExact!.rooms[i])) globalChain = 0;
+    fill(globalBest, allIdx, 0, polishRnd, 0, 0, 0);
+    for (let pass = 0; pass < 2; pass++) {
+      let moved = false;
+      for (const ri of allIdx) if (defragRoom(globalBest, ri)) moved = true;
+      if (!moved) break;
+      fill(globalBest, allIdx, 0, polishRnd, 0, 0, 0);
+    }
+  }
   globalBestScore = totalScore(globalBest.rooms);
 
   return toResult(globalBest, goals, shapes, input, globalBestScore, iterations, effort, Date.now() - t0, unreachable, globalChain);
@@ -860,6 +1036,6 @@ function toResult(
 
 export function toWarm(res: OptimizeResult): WarmStart {
   const w: WarmStart = {};
-  for (const r of res.rooms) w[r.roomId] = r.placements.map((p) => [p.itemId, p.rare]);
+  for (const r of res.rooms) w[r.roomId] = r.placements.map((p) => [p.itemId, p.rare, p.x, p.y]);
   return w;
 }

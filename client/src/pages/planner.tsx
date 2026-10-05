@@ -15,8 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, Dices, Github, ImageDown, Loader2, Moon, Sun, Wand2, X } from "lucide-react";
+import { ChevronDown, Dices, Github, ImageDown, Loader2, Moon, RefreshCw, Sun, Wand2, X } from "lucide-react";
 import { SnapshotsDialog, type Snapshot } from "@/components/snapshots";
+import { LayoutDiff, resultPlacements } from "@/components/layout-diff";
 import { exportHouseImage } from "@/lib/export-image";
 import { useToast } from "@/hooks/use-toast";
 
@@ -221,6 +222,7 @@ export default function Planner() {
       goals: Object.fromEntries(activeRooms.map((r) => [r, goalFor(r)])),
       appealWeight: prefs.appealWeight,
       layout: toWarm(result),
+      placements: resultPlacements(result),
     };
     setSnapshots((prev) => [...prev, snap].slice(-30));
     toast({ title: "Layout saved", description: `"${name}" is available on every device you open this planner on.` });
@@ -384,6 +386,20 @@ export default function Planner() {
           >
             <Dices className="h-3.5 w-3.5" /> Search deeper
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={!ready || running}
+            onClick={() => {
+              warmRef.current = null;
+              setDeepRun((n) => n + 1);
+            }}
+            title="Forget the current layout and search from scratch. Use it when you are about to rebuild the house anyway; otherwise every recompute keeps your pieces where they are."
+            data-testid="button-fresh"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Start fresh
+          </Button>
           <SnapshotsDialog
             snapshots={snapshots}
             canSave={!!result && !running}
@@ -519,6 +535,7 @@ export default function Planner() {
                   />
                 ))}
 
+            {result && !running && snapshots.length > 0 && <LayoutDiff result={result} snapshots={snapshots} />}
             {result && result.leftovers.length > 0 && <Leftovers leftovers={result.leftovers} />}
 
             <Faq />
@@ -708,7 +725,7 @@ function Faq() {
     ],
     [
       "Why does the layout change when I add one piece?",
-      "It mostly should not. The previous layout is one of the search's starting points and wins ties, so a new piece is fitted around it. If a genuinely better arrangement appears (more than 0.35 points), the planner takes it and says so in the status line. Save a layout you like from Layouts to get it back at any time.",
+      "It should not, beyond the new piece. Every recompute starts from your current layout, fits new pieces into the gaps, and only rearranges a room when the gain pays for the work: 0.35 points plus 0.05 per piece you would have to add, move or remove. Save the house you actually built from Layouts; the Changes panel then lists exactly which pieces to touch after any recompute. Start fresh throws the current layout away and searches from scratch, for when you are rebuilding anyway.",
     ],
     [
       "Does it sync between my phone and computer?",

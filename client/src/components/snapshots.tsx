@@ -17,6 +17,14 @@ export interface Snapshot {
   goals: Record<string, RoomGoal>;
   appealWeight: number;
   layout: WarmStart;
+  /** exact cells, so Changes can tell a moved piece from a new one (snapshots from before this field only diff by item) */
+  placements?: Record<string, SnapshotPlacement[]>;
+}
+export interface SnapshotPlacement {
+  itemId: string;
+  rare: boolean;
+  x: number;
+  y: number;
 }
 
 /**
