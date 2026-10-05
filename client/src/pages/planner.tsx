@@ -66,7 +66,7 @@ function useDebouncedSave(key: string, value: unknown, ready: boolean, setSaving
 }
 
 export default function Planner() {
-  const { data, isLoading, isError } = useQuery<StateResponse>({ queryKey: ["/api/state"] });
+  const { data, isLoading, isError, failureCount, refetch } = useQuery<StateResponse>({ queryKey: ["/api/state"] });
   const [ready, setReady] = useState(false);
   const [owned, setOwned] = useState<Owned>({});
   const [house, setHouse] = useState<HouseSetting>(DEFAULT_HOUSE);
@@ -270,8 +270,12 @@ export default function Planner() {
 
   if (isError)
     return (
-      <div className="flex h-screen items-center justify-center p-6 text-sm text-muted-foreground">
-        Could not reach the planner's save server. Reload in a moment.
+      <div className="flex h-screen flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
+        <p>Could not reach the planner's save server after several tries.</p>
+        <p className="max-w-sm text-xs">It pauses when nobody has used it for a while and takes a few seconds to wake. Nothing is lost.</p>
+        <Button size="sm" onClick={() => refetch()} data-testid="button-retry">
+          Try again
+        </Button>
       </div>
     );
 
@@ -495,6 +499,11 @@ export default function Planner() {
               </Card>
             )}
 
+            {isLoading && failureCount > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="text-waking">
+                Waking the save server (it pauses when idle), a few more seconds…
+              </p>
+            )}
             {isLoading || !ready
               ? Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-72 w-full" />)
               : activeRooms.map((r) => (
