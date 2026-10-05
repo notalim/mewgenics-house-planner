@@ -25,12 +25,13 @@ export const PRESETS: Preset[] = [
   {
     id: "breeding",
     label: "Elite breeding: Stimulation",
-    hint: "Your 7s pairs. Max Stimulation, Comfort kept just above 0 so they breed instead of fight. Keep it to 2 to 4 cats.",
+    hint: "Your 7s pairs. Max Stimulation, Comfort kept just above 0 so they breed instead of fight, Health kept at 0 or better so the pair does not get sick or pick up disorders. Keep it to 2 to 4 cats.",
     primary: "s",
-    weights: { s: 1, c: 0.15 },
+    weights: { s: 1, c: 0.15, h: 0.05 },
     target: 95,
     minComfort: 2,
     maxComfort: null,
+    mins: { h: 0 },
     cats: 4,
   },
   {
@@ -88,6 +89,8 @@ export const PRESETS: Preset[] = [
 /** Goals saved before a preset changed get the new defaults (keeps the user's cat count). */
 export function migrateGoal(g: RoomGoal): RoomGoal {
   if (g.preset === "holding" && g.mins?.h === 10 && g.weights.h === 0.6) return goalFromPreset(g.roomId, "holding", g.cats);
+  // breeding rooms saved before the Health 0 floor existed pick it up
+  if (g.preset === "breeding" && g.mins?.h === undefined && g.weights.s === 1 && g.weights.c === 0.15) return goalFromPreset(g.roomId, "breeding", g.cats);
   return g;
 }
 
