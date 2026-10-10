@@ -730,7 +730,7 @@ function Faq() {
       <>
         Yes. Press Import and pick your save, usually{" "}
         <code className="rounded bg-muted px-1 text-xs">%AppData%\\Glaiel Games\\Mewgenics\\&lt;SteamID&gt;\\saves\\steamcampaign01.sav</code> on Windows.
-        The planner reads only the furniture table (every piece, placed or in storage), counts each type and shows a preview before replacing your list. {IS_STATIC ? "It is read right here in your browser with SQLite compiled to WebAssembly and never uploaded." : "The file is parsed and discarded, nothing from it is kept."} Rare pieces are not marked in a way we can read yet, so set those with the Rare stepper afterwards. Console saves cannot be exported, so console players add pieces by hand.
+        The planner reads only the furniture table (every piece, placed or in storage), counts each type and shows a preview before replacing your list. {IS_STATIC ? "It is read right here in your browser with SQLite compiled to WebAssembly and never uploaded." : "The file is parsed and discarded, nothing from it is kept."} Rare pieces are picked up from the save's rarity flag (thanks to the Breeding Manager fork for pinning it down). Console saves cannot be exported, so console players add pieces by hand.
       </>,
     ],
     [

@@ -132,15 +132,19 @@ export function InventoryPanel({
         placed: number;
         stored: number;
         plusMerged: number;
+        rareCount?: number;
       };
-      const items = data.items.filter((r) => FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop");
-      const skipped = data.items.filter((r) => !FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop").map((r) => `${r.itemId} ×${r.count}`);
+      const items = data.items
+        .filter((r) => FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop")
+        // idols and other pieces that cannot be rare in the game are counted as normal whatever the flag says
+        .map((r) => (FURNITURE_BY_ID[r.itemId].canRare ? r : { ...r, count: r.count + r.rare, rare: 0 }));
+      const skipped = data.items.filter((r) => !FURNITURE_BY_ID[r.itemId] && r.itemId !== "poop").map((r) => `${r.itemId} ×${r.count + r.rare}`);
       if (!items.length) throw new Error("No furniture found in that save");
       const notes = [`${data.placed} placed in rooms, ${data.stored} in storage.`];
+      notes.push(data.rareCount ? `${data.rareCount} rare piece${data.rareCount === 1 ? "" : "s"} detected from the save's rarity flag.` : "No rare pieces flagged in this save.");
       if (data.plusMerged) notes.push(`${data.plusMerged} merged "+N" pieces (FurnitureUpgrade mod) counted as one normal piece each.`);
-      notes.push("Rare pieces cannot be told apart in the save yet, so mark those with the Rare stepper after importing.");
       setImportError(null);
-      setPendingImport({ items, source: "save", pieces: items.reduce((a, i) => a + i.count, 0), note: notes.join(" "), skipped });
+      setPendingImport({ items, source: "save", pieces: items.reduce((a, i) => a + i.count + i.rare, 0), note: notes.join(" "), skipped });
     } catch (e: any) {
       const msg = String(e?.message ?? "Could not read that save file");
       setImportError(msg.replace(/^\d{3}: /, "").replace(/^\{"message":"(.*)"\}$/, "$1"));
