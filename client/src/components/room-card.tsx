@@ -22,6 +22,8 @@ export function RoomCard({
   stale,
   focus,
   onFocus,
+  idols,
+  onPin,
 }: {
   def: RoomDef;
   goal: RoomGoal;
@@ -31,6 +33,9 @@ export function RoomCard({
   /** item hovered anywhere in the app (inventory list or another room) */
   focus: string | null;
   onFocus: (itemId: string | null) => void;
+  /** idols you own, with the room each is currently pinned to (if any) */
+  idols?: Array<{ id: string; name: string; pinnedIn: string | null }>;
+  onPin?: (itemId: string, on: boolean) => void;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const setHover = (i: number | null) => {
@@ -77,7 +82,7 @@ export function RoomCard({
         )}
       </div>
 
-      <GoalControls goal={goal} onGoal={onGoal} roomId={def.id} />
+      <GoalControls goal={goal} onGoal={onGoal} roomId={def.id} idols={idols} onPin={onPin} />
 
       <StatStrip result={result} goal={goal} primary={primary} focus={focusStats} />
 
@@ -97,7 +102,19 @@ export function RoomCard({
   );
 }
 
-function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: RoomGoal) => void; roomId: string }) {
+function GoalControls({
+  goal,
+  onGoal,
+  roomId,
+  idols,
+  onPin,
+}: {
+  goal: RoomGoal;
+  onGoal: (g: RoomGoal) => void;
+  roomId: string;
+  idols?: Array<{ id: string; name: string; pinnedIn: string | null }>;
+  onPin?: (itemId: string, on: boolean) => void;
+}) {
   const preset = PRESET_BY_ID[goal.preset];
   const targetStat: StatKey | null = goal.target?.stat ?? (preset?.primary && preset.primary !== "a" ? preset.primary : null);
   return (
@@ -237,10 +254,58 @@ function GoalControls({ goal, onGoal, roomId }: { goal: RoomGoal; onGoal: (g: Ro
               </label>
             ))}
           </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(["h", "m", "s"] as StatKey[]).map((k) => (
+              <label key={k} className="flex items-center gap-2 text-xs">
+                <span className="w-20 text-muted-foreground">Max {STAT_LABEL[k]}</span>
+                <Input
+                  type="number"
+                  className="h-8 font-mono"
+                  placeholder="None"
+                  value={goal.maxs?.[k] ?? ""}
+                  onChange={(e) => {
+                    const maxs = { ...(goal.maxs ?? {}) };
+                    if (e.target.value === "") delete maxs[k];
+                    else maxs[k] = Number(e.target.value);
+                    onGoal({ ...goal, maxs });
+                  }}
+                  data-testid={`input-max-${roomId}-${k}`}
+                />
+              </label>
+            ))}
+          </div>
+          {idols && idols.length > 0 && onPin && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid={`pins-${roomId}`}>
+              <span className="mr-1 text-muted-foreground">Pin idols here</span>
+              {idols.map((idol) => {
+                const here = idol.pinnedIn === roomId;
+                const elsewhere = idol.pinnedIn !== null && !here;
+                return (
+                  <button
+                    key={idol.id}
+                    type="button"
+                    onClick={() => onPin(idol.id, !here)}
+                    className={cn(
+                      "rounded-md border px-2 py-0.5 transition-colors",
+                      here ? "border-primary bg-primary text-primary-foreground" : "border-border bg-muted/40 text-muted-foreground hover:text-foreground",
+                    )}
+                    title={here ? "Pinned to this room. Click to unpin." : elsewhere ? `Pinned to ${idol.pinnedIn}. Click to move it here.` : "Force this idol into this room"}
+                    data-testid={`button-pin-${roomId}-${idol.id}`}
+                  >
+                    {idol.name.replace("Idol of ", "")}
+                    {elsewhere && <span className="ml-1 opacity-60">↗</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Score = sum of weight × stat. A Min is a hard floor: no single piece is worth breaking it, so the room only
-            ends up below it when your pieces cannot reach it at all (see the budget line at the top). Health 10+ cures
-            disorders; Mutation above 10 rolls full mutations. Appeal is house-wide and set in the top bar.
+            Score = sum of weight × stat. Min and Max are hard walls: no single piece is worth breaking one, so a room only
+            misses a Min when your pieces cannot reach it at all (see the budget line at the top). Health 10+ cures
+            disorders (cap it at 9 to keep an Eternal Youth kitten's disorder); Mutation above 10 rolls full mutations,
+            Max Mutation 0 keeps strays from picking up random ones. A pinned idol always goes in this room when it fits
+            and nowhere else; unpinned, Chastity stays in holding-type rooms and Chaos in Fight club. Appeal is
+            house-wide and set in the top bar.
           </p>
         </CollapsibleContent>
       </Collapsible>

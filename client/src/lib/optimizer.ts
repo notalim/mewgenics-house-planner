@@ -3,6 +3,12 @@ import { UTILITY_NOTE, allowedInRoom } from "./data";
 
 /** Score credit for a piece with a house-wide job but no room stats (Food Storage Box): placed when space allows, never over a stat piece. */
 const UTILITY_VALUE = 0.06;
+const FOOD_BOX = "special_foodbox";
+/** a required Food Storage Box is worth this much; past the target a box is only a nicety */
+const FOOD_BOX_REQUIRED = 3;
+const FOOD_BOX_EXTRA = 0.06;
+/** a pinned idol in its room: large enough that it is placed whenever it fits */
+const PIN_BONUS = 40;
 
 /* ------------------------------------------------------------------ */
 /* Inputs / outputs                                                     */
@@ -19,6 +25,10 @@ export interface RoomGoal {
   mins?: Partial<Record<StatKey, number>>;
   /** penalty multiplier for `mins`; the default 4 makes a floor effectively hard (no single piece is worth breaking it) */
   minsWeight?: number;
+  /** hard ceilings, e.g. Mutation 0 in a breeding room so strays do not pick up random mutations */
+  maxs?: Partial<Record<StatKey, number>>;
+  /** item ids (idols) that must go in this room and nowhere else */
+  pins?: string[];
   cats: number;
 }
 
@@ -34,6 +44,8 @@ export interface OptimizeInput {
   goals: RoomGoal[]; // only rooms that are in use
   owned: OwnedItem[];
   appealWeight: number;
+  /** how many Food Storage Boxes must end up in the house; undefined = as many as you own, 0 = none required */
+  foodBoxes?: number;
   warm?: WarmStart | null;
   /** score a drifted room must gain per piece the player would have to move before it replaces the kept cells */
   movePenalty?: number;
@@ -93,6 +105,8 @@ export interface OptimizeResult {
   chain: number;
   /** per stat: positive points across every piece you own, and what the room floors add up to */
   budget?: Record<StatKey, { owned: number; floors: number }>;
+  /** Food Storage Boxes: how many landed in rooms versus how many you asked for */
+  foodBoxes?: { placed: number; owned: number; target: number };
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,7 +160,7 @@ function buildShape(f: Furniture): Shape {
   for (const k of Object.keys(base) as StatKey[]) base[k] = f.stats[k] ?? 0;
   // Surfaces create room for stacked pieces, so they are cheaper than solid tiles.
   const cost = Math.max(0.6, bodyCount - 0.5 * surf);
-  const utility = UTILITY_NOTE[f.id] ? UTILITY_VALUE : 0;
+  const utility = f.id === FOOD_BOX ? 0 : UTILITY_NOTE[f.id] ? UTILITY_VALUE : 0;
   return { id: f.id, w: f.w, h: f.h, body, sup, clear, kind: f.kind, base, cost, bodyCount, surfCount: surf, utility };
 }
 
@@ -180,6 +194,8 @@ class RoomState {
   used = 0;
   /** summed utility credit of placed pieces (see UTILITY_VALUE) */
   util = 0;
+  /** Food Storage Boxes in this room (their value is counted house-wide) */
+  boxes = 0;
   noHang: boolean;
 
   constructor(def: RoomDef) {
@@ -330,6 +346,7 @@ class RoomState {
     }
     this.used += s.bodyCount;
     this.util += s.utility;
+    if (s.id === FOOD_BOX) this.boxes++;
     this.placed.push({ unit, x, y, host, restsOn });
     const m = unit.rare ? 2 : 1;
     for (const k of STAT_ORDER) this.stats[k] += s.base[k] * m;
@@ -373,6 +390,12 @@ function roomScore(stats: Record<StatKey, number>, g: RoomGoal, P = COMFORT_PENA
       const m = g.mins[k];
       if (m === undefined || m === null || k === "c" || k === "a") continue;
       if (stats[k] < m) sc -= P * (g.minsWeight ?? 4) * (m - stats[k]);
+    }
+  if (g.maxs)
+    for (const k of STAT_ORDER) {
+      const m = g.maxs[k];
+      if (m === undefined || m === null || k === "c" || k === "a") continue;
+      if (stats[k] > m) sc -= P * 4 * (stats[k] - m);
     }
   return sc;
 }
@@ -455,31 +478,60 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     return n;
   };
 
+  // Food Storage Boxes count house-wide: the first `foodTarget` are required, the rest are a nicety
+  const boxesOwned = allUnits.filter((u) => u.itemId === FOOD_BOX).length;
+  const foodTarget = Math.min(boxesOwned, input.foodBoxes ?? boxesOwned);
+  const boxValue = (n: number) => Math.min(n, foodTarget) * FOOD_BOX_REQUIRED + Math.max(0, n - foodTarget) * FOOD_BOX_EXTRA;
+  const houseBoxes = (rooms: RoomState[]) => rooms.reduce((a, r) => a + r.boxes, 0);
+
+  // pinned idols: itemId -> goal index. An idol pinned somewhere is barred from every other room.
+  const pinnedTo = new Map<string, number>();
+  goals.forEach((g, i) => (g.pins ?? []).forEach((id) => pinnedTo.set(id, i)));
+  const pinBonus = (room: RoomState, gi: number) => {
+    let n = 0;
+    for (const p of room.placed) if (pinnedTo.get(p.unit.itemId) === gi) n++;
+    return n * PIN_BONUS;
+  };
+  /** room value without the house-wide parts (appeal handled by caller) */
+  const roomValue = (room: RoomState, gi: number, P?: number) => roomScore(room.stats, goals[gi], P) + room.util + pinBonus(room, gi);
+
   const totalScore = (rooms: RoomState[]) => {
     let s = 0;
     let appeal = 0;
     for (let i = 0; i < rooms.length; i++) {
-      s += roomScore(rooms[i].stats, goals[i]) + rooms[i].util;
+      s += roomValue(rooms[i], i);
       appeal += rooms[i].stats.a;
     }
     // tiny tie-breaker: prefer layouts that leave more empty tiles
     let used = 0;
     for (const r of rooms) used += r.used;
-    return s + aW * appeal - used * 0.0005;
+    return s + aW * appeal + boxValue(houseBoxes(rooms)) - used * 0.0005;
   };
 
-  // room def -> preset, so replay() can refuse idols that do not belong in that room's role
-  const presetOfDef = new Map<RoomDef, string>(goals.map((g) => [input.rooms[g.roomId], g.preset]));
-  const okIn = (def: RoomDef, itemId: string) => allowedInRoom(itemId, presetOfDef.get(def) ?? "");
+  // room def -> goal index, so replay() can refuse idols that do not belong in that room
+  const giOfDef = new Map<RoomDef, number>(goals.map((g, i) => [input.rooms[g.roomId], i]));
+  const allowedHere = (itemId: string, gi: number) => {
+    const pin = pinnedTo.get(itemId);
+    if (pin !== undefined) return pin === gi;
+    return allowedInRoom(itemId, goals[gi].preset);
+  };
+  const okIn = (def: RoomDef, itemId: string) => {
+    const gi = giOfDef.get(def);
+    return gi === undefined ? true : allowedHere(itemId, gi);
+  };
 
-  const marginal = (room: RoomState, gi: number, sh: Shape, rare: boolean) => {
+  /** score gained by adding one piece to a room; `boxesNow` is the house-wide Food Storage Box count */
+  const marginal = (room: RoomState, gi: number, sh: Shape, rare: boolean, boxesNow = 0) => {
     const g = goals[gi];
-    if (!allowedInRoom(sh.id, g.preset)) return -1e9;
+    if (!allowedHere(sh.id, gi)) return -1e9;
     const before = roomScore(room.stats, g, FILL_PENALTY) + aW * room.stats.a;
     const m = rare ? 2 : 1;
     const st = { ...room.stats };
     for (const k of STAT_ORDER) st[k] += sh.base[k] * m;
-    return roomScore(st, g, FILL_PENALTY) + aW * st.a - before + sh.utility;
+    let d = roomScore(st, g, FILL_PENALTY) + aW * st.a - before + sh.utility;
+    if (pinnedTo.get(sh.id) === gi) d += PIN_BONUS;
+    if (sh.id === FOOD_BOX) d += boxValue(boxesNow + 1) - boxValue(boxesNow);
+    return d;
   };
 
   /**
@@ -509,13 +561,14 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     let repackLeft = repacks;
     for (let guard = 0; guard < 3000; guard++) {
       const cands: Array<{ ri: number; k: string; dens: number }> = [];
+      const boxesNow = houseBoxes(sol.rooms);
       sol.pool.forEach((units, k) => {
         if (!units.length) return;
         const u = units[0];
         const sh = shapes[u.itemId];
         for (const ri of roomIdx) {
           if (blocked.has(ri + "#" + k)) continue;
-          const d = marginal(sol.rooms[ri], ri, sh, u.rare);
+          const d = marginal(sol.rooms[ri], ri, sh, u.rare, boxesNow);
           if (d <= 1e-9) continue;
           const dens = (d / sh.cost) * (1 + noise * (rnd() - 0.5));
           cands.push({ ri, k, dens });
@@ -587,13 +640,14 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     const room = sol.rooms[ri];
     const g = goals[ri];
     const wants: Array<{ k: string; gain: number }> = [];
+    const boxesNow = houseBoxes(sol.rooms);
     sol.pool.forEach((units, k) => {
       if (!units.length) return;
       const u = units[0];
       const sh = shapes[u.itemId];
-      if (!allowedInRoom(u.itemId, g.preset)) return;
+      if (!allowedHere(u.itemId, ri)) return;
       if (room.used + sh.bodyCount > room.def.free) return;
-      const gain = marginal(room, ri, sh, u.rare);
+      const gain = marginal(room, ri, sh, u.rare, boxesNow);
       if (gain > 1e-9) wants.push({ k, gain });
     });
     if (!wants.length) return false;
@@ -903,7 +957,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     const perMove = input.movePenalty ?? 0.05;
     const margin = input.stabilityMargin ?? 0.35;
     const chosen = warmExact.rooms.slice();
-    const roomVal = (r: RoomState, g: RoomGoal) => roomScore(r.stats, g) + aW * r.stats.a + r.util;
+    const roomVal = (r: RoomState, gi: number) => roomValue(r, gi) + aW * r.stats.a + boxValue(r.boxes) - boxValue(0);
     const cellKey = (p: Placed) => `${p.unit.itemId}|${p.unit.rare ? 1 : 0}|${p.x}|${p.y}`;
     const cands = allIdx
       .map((ri) => {
@@ -914,7 +968,7 @@ export function optimize(input: OptimizeInput): OptimizeResult {
         let moved = 0;
         for (const p of D.placed) if (!wCells.has(cellKey(p))) moved++;
         for (const p of W.placed) if (!dCells.has(cellKey(p))) moved++;
-        return { ri, gain: roomVal(D, goals[ri]) - roomVal(W, goals[ri]), moved };
+        return { ri, gain: roomVal(D, ri) - roomVal(W, ri), moved };
       })
       // rooms that do not pay for themselves stay in the list: taking them alongside a room that does is sometimes
       // the only feasible combination (the full searched layout always is)
@@ -999,6 +1053,21 @@ function toResult(
     const stats = { ...r.stats, c: r.stats.c - Math.max(0, g.cats - 4) };
     const notes: string[] = [...(unreachableNotes[g.roomId] ?? [])];
     let goalMet = notes.length === 0;
+    for (const id of g.pins ?? []) {
+      if (!r.placed.some((p) => p.unit.itemId === id)) {
+        goalMet = false;
+        notes.push(`${input.items[id]?.name ?? id} is pinned here but did not fit`);
+      }
+    }
+    if (g.maxs)
+      for (const k of STAT_ORDER) {
+        const m = g.maxs[k];
+        if (m === undefined || m === null || k === "c" || k === "a") continue;
+        if (stats[k] > m) {
+          goalMet = false;
+          notes.push(`${STAT_NAME[k]} ${stats[k]} is above ${m}`);
+        }
+      }
     if (g.minComfort !== null && stats.c < g.minComfort) {
       goalMet = false;
       notes.push(`Comfort ${stats.c} is below ${g.minComfort}`);
@@ -1049,10 +1118,11 @@ function toResult(
     const sh = shapes[itemId];
     // useful if it would improve any room's score
     let useful = false;
+    const pinnedAt = goals.findIndex((g) => (g.pins ?? []).includes(itemId));
     for (let i = 0; i < goals.length; i++) {
       const g = goals[i];
-      if (!allowedInRoom(itemId, g.preset)) continue;
-      if (sh.utility > 0) useful = true;
+      if (pinnedAt >= 0 ? pinnedAt !== i : !allowedInRoom(itemId, g.preset)) continue;
+      if (sh.utility > 0 || pinnedAt === i || itemId === FOOD_BOX) useful = true;
       const st = { ...sol.rooms[i].stats };
       const m = rare === "1" ? 2 : 1;
       const before = roomScore(st, g, FILL_PENALTY) + input.appealWeight * st.a;
@@ -1062,7 +1132,17 @@ function toResult(
     leftovers.push({ itemId, rare: rare === "1", count: units.length, reason: useful ? "no-space" : "not-useful" });
   });
   leftovers.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === "no-space" ? -1 : 1));
-  return { rooms, houseAppeal, leftovers, totalScore: score, iterations, effort, ms, partial, chain, budget };
+  let boxesPlaced = 0;
+  for (const r of sol.rooms) boxesPlaced += r.boxes;
+  const boxesOwned = input.owned.filter((o) => o.itemId === FOOD_BOX).reduce((a, o) => a + o.count + o.rare, 0);
+  const foodBoxes = { placed: boxesPlaced, owned: boxesOwned, target: Math.min(boxesOwned, input.foodBoxes ?? boxesOwned) };
+  // the search rewards required boxes and pinned idols heavily so they always get placed; the score shown to the
+  // player strips those steering bonuses so it stays comparable with layouts made under other settings
+  let steering = Math.min(boxesPlaced, foodBoxes.target) * (FOOD_BOX_REQUIRED - UTILITY_VALUE);
+  sol.rooms.forEach((r, i) => {
+    for (const pl of r.placed) if ((goals[i].pins ?? []).includes(pl.unit.itemId)) steering += PIN_BONUS;
+  });
+  return { rooms, houseAppeal, leftovers, totalScore: score - steering, iterations, effort, ms, partial, chain, budget, foodBoxes };
 }
 
 export function toWarm(res: OptimizeResult): WarmStart {

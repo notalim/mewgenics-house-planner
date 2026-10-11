@@ -11,6 +11,7 @@ import { InventoryPanel, type Owned } from "@/components/inventory-panel";
 import { RoomCard } from "@/components/room-card";
 import { Glyph, Logo, StatChips } from "@/components/bits";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -32,6 +33,8 @@ interface HouseSetting {
 interface Prefs {
   appealWeight: number;
   effort?: string;
+  /** Food Storage Boxes that must land in the house; undefined = all you own */
+  foodBoxes?: number;
 }
 interface StateResponse {
   inventory: Array<{ itemId: string; count: number; rare: number }>;
@@ -129,7 +132,7 @@ export default function Planner() {
       if (catsByRole[g.preset] === undefined) catsByRole[g.preset] = g.cats;
     }
     try {
-      const res = await runAutoStrategy({ owned: ownedList, appealWeight: prefs.appealWeight }, activeRooms, catsByRole);
+      const res = await runAutoStrategy({ owned: ownedList, appealWeight: prefs.appealWeight, foodBoxes: prefs.foodBoxes }, activeRooms, catsByRole);
       warmRef.current = null;
       setGoals((prev) => {
         const next = { ...prev };
@@ -180,6 +183,30 @@ export default function Planner() {
     [owned],
   );
   const goalList = useMemo(() => activeRooms.map(goalFor), [activeRooms.join(","), goalFor]);
+  // idols you own, each with the room it is pinned to (pins live on the room goals)
+  const idols = useMemo(
+    () =>
+      ownedList
+        .filter((o) => o.count + o.rare > 0 && FURNITURE_BY_ID[o.itemId]?.name.startsWith("Idol of"))
+        .map((o) => ({
+          id: o.itemId,
+          name: FURNITURE_BY_ID[o.itemId].name,
+          pinnedIn: activeRooms.find((r) => (goalFor(r).pins ?? []).includes(o.itemId)) ?? null,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [ownedList, activeRooms.join(","), goalFor],
+  );
+  const pinIdol = (roomId: string, itemId: string, on: boolean) =>
+    setGoals((prev) => {
+      const next = { ...prev };
+      for (const r of activeRooms) {
+        const g = goalFor(r);
+        const pins = (g.pins ?? []).filter((id) => id !== itemId);
+        if (on && r === roomId) pins.push(itemId);
+        if (pins.length !== (g.pins ?? []).length || (on && r === roomId)) next[r] = { ...g, pins };
+      }
+      return next;
+    });
 
   // "Search deeper" runs one exhaustive pass on top of the current layout
   const effort = deepPending.current ? effortFor("max") : effortFor(prefs.effort ?? "normal");
@@ -188,6 +215,7 @@ export default function Planner() {
         goals: goalList,
         owned: ownedList,
         appealWeight: prefs.appealWeight,
+        foodBoxes: prefs.foodBoxes,
         warm: warmRef.current,
         effort,
         seed: seed + deepRun,
@@ -200,6 +228,7 @@ export default function Planner() {
     JSON.stringify(ownedList),
     JSON.stringify(goalList),
     prefs.appealWeight,
+    prefs.foodBoxes,
     prefs.effort,
     deepRun,
   ]);
@@ -221,6 +250,7 @@ export default function Planner() {
       house,
       goals: Object.fromEntries(activeRooms.map((r) => [r, goalFor(r)])),
       appealWeight: prefs.appealWeight,
+      foodBoxes: prefs.foodBoxes,
       layout: toWarm(result),
       placements: resultPlacements(result),
     };
@@ -232,7 +262,7 @@ export default function Planner() {
     warmRef.current = snap.layout;
     setHouse(snap.house);
     setGoals((prev) => ({ ...prev, ...snap.goals }));
-    setPrefs((p) => ({ ...p, appealWeight: snap.appealWeight }));
+    setPrefs((p) => ({ ...p, appealWeight: snap.appealWeight, foodBoxes: snap.foodBoxes }));
     setDeepRun((n) => n + 1);
     toast({ title: "Layout restored", description: `Back to "${snap.name}". Pieces you added since then are fitted around it.` });
   };
@@ -348,6 +378,22 @@ export default function Planner() {
               ))}
             </SelectContent>
           </Select>
+
+          <label className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-card px-2 text-xs text-muted-foreground" title="How many Food Storage Boxes must end up in the house. Blank = every one you own, 0 = none required.">
+            Food boxes
+            <Input
+              type="number"
+              min={0}
+              placeholder="all"
+              className="h-6 w-14 border-0 bg-transparent px-1 font-mono text-xs"
+              value={prefs.foodBoxes ?? ""}
+              onChange={(e) => {
+                const { foodBoxes: _drop, ...rest } = prefs;
+                setPrefs(e.target.value === "" ? rest : { ...rest, foodBoxes: Math.max(0, Number(e.target.value) || 0) });
+              }}
+              data-testid="input-foodboxes"
+            />
+          </label>
 
           <Button
             size="sm"
@@ -501,6 +547,7 @@ export default function Planner() {
               placedCount={(result?.rooms ?? []).reduce((a, r) => a + r.placements.length, 0)}
               ownedCount={ownedList.reduce((a, o) => a + o.count + o.rare, 0)}
               budget={result?.budget}
+              foodBoxes={result?.foodBoxes}
             />
 
             {auto.info && <StrategyCard info={auto.info} onClose={() => setAuto({ running: false, info: null })} />}
@@ -533,6 +580,8 @@ export default function Planner() {
                     onGoal={(g) => setGoals((prev) => ({ ...prev, [r]: g }))}
                     focus={focus}
                     onFocus={setFocus}
+                    idols={idols}
+                    onPin={(itemId, on) => pinIdol(r, itemId, on)}
                   />
                 ))}
 
@@ -609,6 +658,7 @@ function SummaryBar({
   placedCount,
   ownedCount,
   budget,
+  foodBoxes,
 }: {
   running: boolean;
   iterations: number;
@@ -620,6 +670,7 @@ function SummaryBar({
   placedCount: number;
   ownedCount: number;
   budget?: Record<StatKey, { owned: number; floors: number }>;
+  foodBoxes?: { placed: number; owned: number; target: number };
 }) {
   const pct = running ? Math.min(100, Math.round((iterations / Math.max(1, effort)) * 100)) : 100;
   // floors that eat most of a stat you barely own are the usual reason a room ends up short
@@ -659,6 +710,13 @@ function SummaryBar({
           style={{ width: `${pct}%`, opacity: running ? 1 : 0.35 }}
         />
       </div>
+      {foodBoxes && foodBoxes.owned > 0 && (
+        <p className="text-[11px] text-muted-foreground" data-testid="text-foodboxes">
+          Food Storage Boxes: <span className="font-mono text-foreground">{foodBoxes.placed}</span> of {foodBoxes.owned} placed
+          {foodBoxes.target < foodBoxes.owned ? ` (you asked for ${foodBoxes.target})` : ""}
+          {foodBoxes.placed < foodBoxes.target ? `. ${foodBoxes.target - foodBoxes.placed} did not fit; clear tiles or lower the number in the top bar.` : "."}
+        </p>
+      )}
       {tight.length > 0 && (
         <p className="text-[11px] text-muted-foreground" data-testid="text-budget">
           {tight.map(([k, b]) => (
@@ -758,6 +816,10 @@ function Faq() {
     [
       "How many rooms can I have? Where did the basements go?",
       "Five spaces in the current game: the starting room, the attic (1 retired cat sent to Frank), then rooms 2, 3 and 4 (25, 60 and 100 retired cats). The game's data files also contain five basement rooms with their own upgrade chain, but nothing in play unlocks them yet, so the planner hides them. If they ever ship, they are one flag away.",
+    ],
+    [
+      "Can I force an idol into a room, keep Mutation out of my breeding room, or get all my food boxes placed?",
+      "Yes to all three. Open Fine-tune weights on a room: Pin idols here forces the Idol of Chastity, Chaos or any other idol you own into that room and nowhere else. Max Health / Mutation / Stimulation are hard ceilings (Max Mutation 0 keeps strays from picking up random mutations, Max Health 9 keeps an Eternal Youth kitten's disorder from being cured). Food boxes in the top bar is how many Food Storage Boxes must land in the house; it defaults to every one you own, and the status line tells you if some did not fit.",
     ],
     [
       "The game let me place something the planner refuses (or vice versa).",

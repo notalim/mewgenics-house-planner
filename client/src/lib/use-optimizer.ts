@@ -107,7 +107,7 @@ export function useOptimizer(req: Req | null, deps: unknown[]) {
 
 /** One-off auto strategy search in its own worker (falls back to the main thread). */
 export function runAutoStrategy(
-  input: { owned: OptimizeInput["owned"]; appealWeight: number },
+  input: { owned: OptimizeInput["owned"]; appealWeight: number; foodBoxes?: number },
   roomIds: string[],
   catsByRole: Record<string, number>,
 ): Promise<AutoResult> {

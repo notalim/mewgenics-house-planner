@@ -18,6 +18,7 @@ So I wrote something that does it for me. You keep the fun parts (deciding which
 - Knows all 633 furniture pieces: shape, headroom, what each can rest on, stats, whether it can be rare. Knows the real room grids, including the sloped attic roof that nothing can hang from.
 - Places pieces the way the game allows: on the floor, on shelves and tables, hanging from the ceiling, with the right clearance.
 - Splits your furniture across rooms to get the most out of a goal per room: elite breeding, feeder nursery, fight club, holding, or your own weights and floors. Minimum Comfort, Health, Mutation and Stimulation are hard floors, so a room never dips below what you asked for when the pieces exist.
+- Lets you pin an idol to a room (Chastity in holding, Chaos in or out of the fight club, your call), cap a stat (Max Mutation 0 in a breeding room so strays do not pick up random mutations, Max Health 9 to keep an Eternal Youth kitten's disorder), and say how many Food Storage Boxes must end up in the house.
 - Shows each room with placement numbers, so you build from 1 upward and every shelf exists before the thing that sits on it. Hover any piece for its stats and what it rests on.
 - Explains what it left in storage and why, and shows a budget line when a stat is scarce (for example "Health: your pieces add up to +12, floors ask for 10").
 - Keeps your layout stable. Adding one piece changes one cell, not the whole house. Save the house you built under Layouts and the Changes panel lists exactly which pieces to move after any recompute.

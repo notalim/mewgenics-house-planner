@@ -16,6 +16,7 @@ export interface Snapshot {
   house: { stage: string; enabled: string[] };
   goals: Record<string, RoomGoal>;
   appealWeight: number;
+  foodBoxes?: number;
   layout: WarmStart;
   /** exact cells, so Changes can tell a moved piece from a new one (snapshots from before this field only diff by item) */
   placements?: Record<string, SnapshotPlacement[]>;
